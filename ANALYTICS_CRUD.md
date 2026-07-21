@@ -4,6 +4,10 @@ This fork adds a guarded CRUD layer to the existing read-only Analytics MCP.
 The tools use the Google Analytics Admin API and preserve the existing Data API
 reporting tools.
 
+The initial protected deployment scope is the Poli Steel Analytics account
+`401804063`, property `546475155`, and web stream `15297504355`. These numeric
+identifiers are allowlist values, not credentials or secrets.
+
 ## Tools
 
 - `analytics_list_mutable_resources`
