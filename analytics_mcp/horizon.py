@@ -94,7 +94,9 @@ def configure_adc_from_base64() -> Path | None:
     Workload identity or an already configured GOOGLE_APPLICATION_CREDENTIALS
     path remains supported when the base64 environment variable is absent.
     """
-    encoded = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64", "").strip()
+    encoded = os.getenv(
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64", ""
+    ).strip()
     if not encoded:
         return None
 
@@ -170,7 +172,9 @@ def _with_structured_errors(function: ToolFunction) -> ToolFunction:
                     **exc.as_dict(),
                 }
             }
-        except Exception as exc:  # The prior low-level server serialized all errors.
+        except (
+            Exception
+        ) as exc:  # The prior low-level server serialized all errors.
             return {
                 "error": {
                     "type": type(exc).__name__,
