@@ -26,7 +26,7 @@ from google.adk.tools.mcp_tool.conversion_utils import adk_to_mcp_tool_type
 from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 
-from analytics_mcp.tools.admin.crud import (
+from analytics_mcp.tools.admin.crud_hardened import (
     analytics_archive_resource,
     analytics_batch_operations,
     analytics_create_resource,
@@ -171,14 +171,15 @@ async def call_mcp_tool(name: str, arguments: dict) -> list[mcp_types.Content]:
                 f"MCP Server: Error executing ADK tool '{name}': {exc}",
                 file=sys.stderr,
             )
-            error_text = json.dumps(
-                {
-                    "error": {
-                        "type": type(exc).__name__,
-                        "message": str(exc),
-                    }
+            if hasattr(exc, "as_dict"):
+                error_payload = exc.as_dict()
+                error_payload["type"] = type(exc).__name__
+            else:
+                error_payload = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
                 }
-            )
+            error_text = json.dumps({"error": error_payload})
             return [mcp_types.TextContent(type="text", text=error_text)]
 
     error_text = json.dumps(
