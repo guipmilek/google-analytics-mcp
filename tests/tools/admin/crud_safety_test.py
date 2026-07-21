@@ -33,9 +33,7 @@ class CrudSafetyTest(unittest.TestCase):
             "operations": [{"action": "update"}],
         }
         with patch.dict(os.environ, self._environment(), clear=True):
-            issued = crud_safety.issue_confirmation(
-                payload, "546475155", 900
-            )
+            issued = crud_safety.issue_confirmation(payload, "546475155", 900)
             confirmation = issued["required_confirmation"]
             verified = crud_safety.verify_and_register_confirmation(
                 confirmation, payload, "546475155"
@@ -70,9 +68,7 @@ class CrudSafetyTest(unittest.TestCase):
                     {"name": "properties/999/customDimensions/1"},
                     config,
                 )
-            self.assertEqual(
-                "CROSS_PROPERTY_REFERENCE", context.exception.code
-            )
+            self.assertEqual("CROSS_PROPERTY_REFERENCE", context.exception.code)
 
     def test_data_stream_allowlist(self):
         with patch.dict(os.environ, self._environment(), clear=True):

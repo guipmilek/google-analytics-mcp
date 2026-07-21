@@ -22,7 +22,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Sequence
 
-
 _PROPERTY_RE = re.compile(r"(?:^|/)properties/(\d+)(?:/|$)")
 _STREAM_RE = re.compile(
     r"^properties/(?P<property>\d+)/dataStreams/(?P<stream>\d+)(?:/|$)"
@@ -145,12 +144,8 @@ def load_safety_config() -> SafetyConfig:
         mutations_enabled=_env_bool(
             "GOOGLE_ANALYTICS_ADMIN_MUTATIONS_ENABLED", False
         ),
-        allowed_account_ids=_env_ids(
-            "GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS"
-        ),
-        allowed_property_ids=_env_ids(
-            "GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS"
-        ),
+        allowed_account_ids=_env_ids("GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS"),
+        allowed_property_ids=_env_ids("GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS"),
         allowed_data_stream_ids=_env_ids(
             "GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS"
         ),
@@ -256,7 +251,9 @@ def _confirmation_secret() -> bytes:
 
 
 def _purge_replay_cache(now: int) -> None:
-    expired = [key for key, expiry in _USED_CONFIRMATIONS.items() if expiry < now]
+    expired = [
+        key for key, expiry in _USED_CONFIRMATIONS.items() if expiry < now
+    ]
     for key in expired:
         _USED_CONFIRMATIONS.pop(key, None)
 

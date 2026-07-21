@@ -75,9 +75,7 @@ def prevent_stdio_inheritance():
 
 def _get_credentials(write: bool = False):
     scopes = (
-        (_EDIT_ANALYTICS_SCOPE,)
-        if write
-        else (_READ_ONLY_ANALYTICS_SCOPE,)
+        (_EDIT_ANALYTICS_SCOPE,) if write else (_READ_ONLY_ANALYTICS_SCOPE,)
     )
     if scopes not in _CREDENTIALS_BY_SCOPES:
         with prevent_stdio_inheritance():

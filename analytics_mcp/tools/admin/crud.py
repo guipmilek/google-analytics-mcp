@@ -41,7 +41,6 @@ from analytics_mcp.tools.client import (
 )
 from analytics_mcp.tools.utils import construct_property_rn, proto_to_dict
 
-
 _MUTATING_ACTIONS = {"create", "update", "archive", "delete"}
 
 
@@ -108,7 +107,9 @@ def _normalize_data(
                 f"Field '{canonical}' cannot be supplied during create.",
             )
         if action == "update" and not field.writable_on_update:
-            code = "IMMUTABLE_FIELD" if field.immutable else "FIELD_NOT_WRITABLE"
+            code = (
+                "IMMUTABLE_FIELD" if field.immutable else "FIELD_NOT_WRITABLE"
+            )
             raise CrudSafetyError(
                 code,
                 f"Field '{canonical}' cannot be updated.",
@@ -324,9 +325,7 @@ def _list_sync(spec: ResourceSpec, parent: str) -> List[Dict[str, Any]]:
 
 def _get_sync(spec: ResourceSpec, resource_name: str) -> Dict[str, Any]:
     if "get" in spec.actions:
-        request = _build_request(
-            spec, "get", resource_name=resource_name
-        )
+        request = _build_request(spec, "get", resource_name=resource_name)
         return proto_to_dict(_invoke(spec, "get", request, write=False))
 
     if "list" not in spec.actions:
@@ -640,9 +639,7 @@ async def analytics_list_resources(
     resolved_parent = _default_parent(
         spec, property_name, parent, property_num, config
     )
-    validate_property_scope(
-        property_num, {"parent": resolved_parent}, config
-    )
+    validate_property_scope(property_num, {"parent": resolved_parent}, config)
     return await asyncio.to_thread(_list_sync, spec, resolved_parent)
 
 

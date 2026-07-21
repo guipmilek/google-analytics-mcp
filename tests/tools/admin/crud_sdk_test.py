@@ -12,9 +12,7 @@ class CrudSdkContractTest(unittest.TestCase):
     def test_registry_matches_installed_sdk(self):
         for spec in list_resource_specs():
             module = (
-                admin_v1alpha
-                if spec.api_channel == "alpha"
-                else admin_v1beta
+                admin_v1alpha if spec.api_channel == "alpha" else admin_v1beta
             )
             message_class = getattr(module, spec.message_class)
             client_class = module.AnalyticsAdminServiceClient
@@ -41,9 +39,7 @@ class CrudSdkContractTest(unittest.TestCase):
     def test_request_resource_fields_exist(self):
         for spec in list_resource_specs():
             module = (
-                admin_v1alpha
-                if spec.api_channel == "alpha"
-                else admin_v1beta
+                admin_v1alpha if spec.api_channel == "alpha" else admin_v1beta
             )
             for action in ("create", "update"):
                 if action not in spec.actions:

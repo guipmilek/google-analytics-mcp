@@ -427,9 +427,7 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
                 writable_on_update=False,
                 output_only=True,
             ),
-            FieldSpec(
-                "acquisition_conversion_event_lookback_window", "enum"
-            ),
+            FieldSpec("acquisition_conversion_event_lookback_window", "enum"),
             FieldSpec("other_conversion_event_lookback_window", "enum"),
             FieldSpec("reporting_attribution_model", "enum"),
             FieldSpec("ads_web_conversion_data_export_scope", "enum"),
