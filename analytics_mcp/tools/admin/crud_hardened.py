@@ -132,9 +132,7 @@ def _add_verification_summary(result: Dict[str, Any]) -> Dict[str, Any]:
         if item.get("post_execution_verification_status") == "FAILED"
     ]
     result["execution_status"] = (
-        "SUCCEEDED"
-        if not failures
-        else "SUCCEEDED_WITH_VERIFICATION_WARNINGS"
+        "SUCCEEDED" if not failures else "SUCCEEDED_WITH_VERIFICATION_WARNINGS"
     )
     result["verification"] = {
         "post_execution_reads_performed": True,

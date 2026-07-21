@@ -36,9 +36,9 @@ class CrudHardenedTest(unittest.TestCase):
             crud_hardened._validate_data_stream_mutation_scope(
                 "546475155", operations
             )
-            operations[0]["resource_name"] = (
-                "properties/546475155/dataStreams/1"
-            )
+            operations[0][
+                "resource_name"
+            ] = "properties/546475155/dataStreams/1"
             with self.assertRaises(CrudSafetyError) as context:
                 crud_hardened._validate_data_stream_mutation_scope(
                     "546475155", operations
@@ -67,9 +67,7 @@ class CrudHardenedTest(unittest.TestCase):
                 "update_mask": ["display_name"],
             }
         )
-        self.assertEqual(
-            "FAILED", result["post_execution_verification_status"]
-        )
+        self.assertEqual("FAILED", result["post_execution_verification_status"])
         self.assertEqual(
             "read failed",
             result["post_execution_verification_error"]["message"],
@@ -102,9 +100,7 @@ class CrudHardenedTest(unittest.TestCase):
         result = {
             "mode": "EXECUTE",
             "execution_status": "SUCCEEDED",
-            "results": [
-                {"post_execution_verification_status": "FAILED"}
-            ],
+            "results": [{"post_execution_verification_status": "FAILED"}],
         }
         summarized = crud_hardened._add_verification_summary(result)
         self.assertEqual(
