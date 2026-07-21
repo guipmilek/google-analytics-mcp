@@ -22,10 +22,10 @@ from unittest.mock import patch
 
 import google.auth
 from google.analytics import (
-    admin_v1beta,
-    data_v1beta,
     admin_v1alpha,
+    admin_v1beta,
     data_v1alpha,
+    data_v1beta,
 )
 from google.api_core.gapic_v1.client_info import ClientInfo
 
@@ -37,23 +37,21 @@ def _get_package_version_with_fallback():
     """
     try:
         return metadata.version("analytics-mcp")
-    except:
+    except metadata.PackageNotFoundError:
         return "unknown"
 
 
-# Client information that adds a custom user agent to all API requests.
 _CLIENT_INFO = ClientInfo(
     user_agent=f"analytics-mcp/{_get_package_version_with_fallback()}"
 )
 
-# Read-only scope for Analytics Admin API and Analytics Data API.
 _READ_ONLY_ANALYTICS_SCOPE = (
     "https://www.googleapis.com/auth/analytics.readonly"
 )
+_EDIT_ANALYTICS_SCOPE = "https://www.googleapis.com/auth/analytics.edit"
 
-# Lock to ensure client and credential creation is thread-safe
 _client_lock = threading.Lock()
-_CREDENTIALS = None
+_CREDENTIALS_BY_SCOPES = {}
 
 
 @contextlib.contextmanager
@@ -75,22 +73,29 @@ def prevent_stdio_inheritance():
         yield
 
 
-def _get_credentials():
-    global _CREDENTIALS
-    # Expected to be called under _client_lock
-    if _CREDENTIALS is None:
+def _get_credentials(write: bool = False):
+    scopes = (
+        (_EDIT_ANALYTICS_SCOPE,) if write else (_READ_ONLY_ANALYTICS_SCOPE,)
+    )
+    if scopes not in _CREDENTIALS_BY_SCOPES:
         with prevent_stdio_inheritance():
-            _CREDENTIALS, _ = google.auth.default(
-                scopes=[_READ_ONLY_ANALYTICS_SCOPE]
-            )
-    return _CREDENTIALS
+            credentials, _ = google.auth.default(scopes=list(scopes))
+        _CREDENTIALS_BY_SCOPES[scopes] = credentials
+    return _CREDENTIALS_BY_SCOPES[scopes]
 
 
-def create_admin_api_client() -> admin_v1beta.AnalyticsAdminServiceClient:
-    """Returns the Google Analytics Admin API client."""
+def create_admin_api_client(
+    write: bool = False,
+) -> admin_v1beta.AnalyticsAdminServiceClient:
+    """Returns the Google Analytics Admin API client.
+
+    Args:
+        write: Requests the analytics.edit OAuth scope when True.
+    """
     with _client_lock:
         return admin_v1beta.AnalyticsAdminServiceClient(
-            client_info=_CLIENT_INFO, credentials=_get_credentials()
+            client_info=_CLIENT_INFO,
+            credentials=_get_credentials(write=write),
         )
 
 
@@ -98,17 +103,23 @@ def create_data_api_client() -> data_v1beta.BetaAnalyticsDataClient:
     """Returns the Google Analytics Data API client."""
     with _client_lock:
         return data_v1beta.BetaAnalyticsDataClient(
-            client_info=_CLIENT_INFO, credentials=_get_credentials()
+            client_info=_CLIENT_INFO,
+            credentials=_get_credentials(write=False),
         )
 
 
-def create_admin_alpha_api_client() -> (
-    admin_v1alpha.AnalyticsAdminServiceClient
-):
-    """Returns the Google Analytics Admin API (alpha) client."""
+def create_admin_alpha_api_client(
+    write: bool = False,
+) -> admin_v1alpha.AnalyticsAdminServiceClient:
+    """Returns the Google Analytics Admin API (alpha) client.
+
+    Args:
+        write: Requests the analytics.edit OAuth scope when True.
+    """
     with _client_lock:
         return admin_v1alpha.AnalyticsAdminServiceClient(
-            client_info=_CLIENT_INFO, credentials=_get_credentials()
+            client_info=_CLIENT_INFO,
+            credentials=_get_credentials(write=write),
         )
 
 
@@ -116,5 +127,6 @@ def create_data_api_alpha_client() -> data_v1alpha.AlphaAnalyticsDataClient:
     """Returns the Google Analytics Data API (Alpha) client."""
     with _client_lock:
         return data_v1alpha.AlphaAnalyticsDataClient(
-            client_info=_CLIENT_INFO, credentials=_get_credentials()
+            client_info=_CLIENT_INFO,
+            credentials=_get_credentials(write=False),
         )
