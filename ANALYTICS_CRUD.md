@@ -78,6 +78,10 @@ Completed operations are never described as rolled back. A transport failure
 after dispatch is reported as potentially completed and is not automatically
 retried.
 
+A failed read after a successful mutation is reported separately as
+`SUCCEEDED_WITH_VERIFICATION_WARNINGS`; it does not rewrite the known mutation
+dispatch result as an unknown execution.
+
 ## Environment
 
 Start with all mutation gates disabled:
