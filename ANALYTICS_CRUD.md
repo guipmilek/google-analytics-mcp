@@ -82,6 +82,38 @@ A failed read after a successful mutation is reported separately as
 `SUCCEEDED_WITH_VERIFICATION_WARNINGS`; it does not rewrite the known mutation
 dispatch result as an unknown execution.
 
+## Horizon deployment
+
+Use this server entrypoint in Prefect Horizon:
+
+```text
+horizon_server.py:mcp
+```
+
+The entrypoint exposes the existing read and CRUD functions through a native
+FastMCP server. It does not proxy through a second subprocess.
+
+For ADC credentials stored as a Horizon secret, configure:
+
+```env
+GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64=<base64 service-account JSON>
+```
+
+The entrypoint decodes the value into a mode `0600` file under `/tmp` and sets
+`GOOGLE_APPLICATION_CREDENTIALS`. Existing ADC mechanisms remain supported when
+the base64 variable is absent.
+
+Optional Google OAuth protection for the public MCP endpoint uses:
+
+```env
+GOOGLE_ANALYTICS_MCP_OAUTH_CLIENT_ID=<client ID>
+GOOGLE_ANALYTICS_MCP_OAUTH_CLIENT_SECRET=<client secret>
+GOOGLE_ANALYTICS_MCP_BASE_URL=https://<project>.fastmcp.app
+```
+
+The OAuth client ID and secret must be configured together. API calls still use
+ADC; endpoint login and Google Analytics API authorization are separate layers.
+
 ## Environment
 
 Start with all mutation gates disabled:
