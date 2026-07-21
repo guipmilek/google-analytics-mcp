@@ -18,41 +18,49 @@ The singleton allows other modules to register their tools with the same MCP
 server.
 """
 
-# MCP Server Imports
 import json
 import sys
-from json import tool
-from mcp import types as mcp_types  # Use alias to avoid conflict
-from mcp.server.lowlevel import Server
 
-# ADK Tool Imports
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.mcp_tool.conversion_utils import adk_to_mcp_tool_type
+from mcp import types as mcp_types
+from mcp.server.lowlevel import Server
 
+from analytics_mcp.tools.admin.crud import (
+    analytics_archive_resource,
+    analytics_batch_operations,
+    analytics_create_resource,
+    analytics_delete_resource,
+    analytics_get_mutation_schema,
+    analytics_get_resource,
+    analytics_list_mutable_resources,
+    analytics_list_resources,
+    analytics_update_resource,
+)
 from analytics_mcp.tools.admin.info import (
     get_account_summaries,
-    list_google_ads_links,
     get_property_details,
+    list_google_ads_links,
     list_property_annotations,
 )
-from analytics_mcp.tools.reporting.core import (
-    run_report,
-    _run_report_description,
+from analytics_mcp.tools.reporting.conversions import (
+    _run_conversions_report_description,
+    run_conversions_report,
 )
-from analytics_mcp.tools.reporting.realtime import (
-    run_realtime_report,
-    _run_realtime_report_description,
+from analytics_mcp.tools.reporting.core import (
+    _run_report_description,
+    run_report,
+)
+from analytics_mcp.tools.reporting.funnel import (
+    _run_funnel_report_description,
+    run_funnel_report,
 )
 from analytics_mcp.tools.reporting.metadata import (
     get_custom_dimensions_and_metrics,
 )
-from analytics_mcp.tools.reporting.funnel import (
-    run_funnel_report,
-    _run_funnel_report_description,
-)
-from analytics_mcp.tools.reporting.conversions import (
-    run_conversions_report,
-    _run_conversions_report_description,
+from analytics_mcp.tools.reporting.realtime import (
+    _run_realtime_report_description,
+    run_realtime_report,
 )
 
 run_report_with_description = FunctionTool(run_report)
@@ -70,7 +78,6 @@ run_conversions_report_with_description.description = (
     _run_conversions_report_description()
 )
 
-# Instantiate the ADK tools
 tools = [
     FunctionTool(get_account_summaries),
     FunctionTool(list_google_ads_links),
@@ -81,34 +88,33 @@ tools = [
     run_realtime_report_with_description,
     run_funnel_report_with_description,
     run_conversions_report_with_description,
+    FunctionTool(analytics_list_mutable_resources),
+    FunctionTool(analytics_get_mutation_schema),
+    FunctionTool(analytics_get_resource),
+    FunctionTool(analytics_list_resources),
+    FunctionTool(analytics_create_resource),
+    FunctionTool(analytics_update_resource),
+    FunctionTool(analytics_archive_resource),
+    FunctionTool(analytics_delete_resource),
+    FunctionTool(analytics_batch_operations),
 ]
 
-tool_map = {t.name: t for t in tools}
+tool_map = {tool.name: tool for tool in tools}
 
-app = Server(
-    name="Google Analytics MCP Server",
-)
+app = Server(name="Google Analytics MCP Server")
 
 mcp_tools = [adk_to_mcp_tool_type(tool) for tool in tools]
 
 
 def sanitize_mcp_schema_properties(node: dict) -> None:
-    """Ensure additionalProperties is a boolean value to satisfy certain MCP clients.
-
-    This addresses issues with clients like Claude Desktop that fail when
-    additionalProperties is a schema object instead of a boolean.
-    """
+    """Ensures additionalProperties is compatible with MCP clients."""
     if not isinstance(node, dict):
         return
-
-    # Check and update the current node
     if "additionalProperties" in node:
-        val = node["additionalProperties"]
-        if not isinstance(val, bool):
+        value = node["additionalProperties"]
+        if not isinstance(value, bool):
             node["additionalProperties"] = True
-
-    # Traverse children
-    for key, child in node.items():
+    for child in node.values():
         if isinstance(child, dict):
             sanitize_mcp_schema_properties(child)
         elif isinstance(child, list):
@@ -117,22 +123,13 @@ def sanitize_mcp_schema_properties(node: dict) -> None:
                     sanitize_mcp_schema_properties(element)
 
 
-# Update the inputSchema for tools that do not have parameters.
-# TODO: This is a bug in the ADK and can be removed once it is fixed.
-# https://github.com/google/adk-python/issues/948
 for tool in mcp_tools:
-    # Check if inputSchema is empty
     if tool.inputSchema == {}:
         tool.inputSchema = {"type": "object", "properties": {}}
-    # Fix union type hints generating spurious "type": "null"
     for prop in tool.inputSchema.get("properties", {}).values():
         if "anyOf" in prop and prop.get("type") == "null":
             del prop["type"]
-
-    # Ensure additionalProperties is compatible with all MCP clients
     sanitize_mcp_schema_properties(tool.inputSchema)
-
-    # Explicitly mark required fields for reporting tools to guide the LLM
     if tool.name == "run_report":
         tool.inputSchema["required"] = [
             "property_id",
@@ -141,7 +138,11 @@ for tool in mcp_tools:
             "metrics",
         ]
     elif tool.name == "run_realtime_report":
-        tool.inputSchema["required"] = ["property_id", "dimensions", "metrics"]
+        tool.inputSchema["required"] = [
+            "property_id",
+            "dimensions",
+            "metrics",
+        ]
     elif tool.name == "run_conversions_report":
         tool.inputSchema["required"] = [
             "property_id",
@@ -162,23 +163,21 @@ async def call_mcp_tool(name: str, arguments: dict) -> list[mcp_types.Content]:
     if name in tool_map:
         tool = tool_map[name]
         try:
-            adk_tool_response = await tool.run_async(
-                args=arguments,
-                tool_context=None,
-            )
-            # Serialize the ADK tool response to JSON for MCP response
-            response_text = json.dumps(adk_tool_response, indent=2)
-            # MCP expects a list of mcp_types.Content parts
+            response = await tool.run_async(args=arguments, tool_context=None)
+            response_text = json.dumps(response, indent=2)
             return [mcp_types.TextContent(type="text", text=response_text)]
-
-        except Exception as e:
+        except Exception as exc:
             print(
-                f"MCP Server: Error executing ADK tool '{name}': {e}",
+                f"MCP Server: Error executing ADK tool '{name}': {exc}",
                 file=sys.stderr,
             )
-            # Return an error message in MCP format
             error_text = json.dumps(
-                {"error": f"Failed to execute tool '{name}': {str(e)}"}
+                {
+                    "error": {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                }
             )
             return [mcp_types.TextContent(type="text", text=error_text)]
 
