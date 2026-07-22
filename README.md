@@ -26,6 +26,7 @@ native Prefect Horizon/FastMCP entrypoint.
 Read-only inspection:
 
 - `analytics_safety_status`
+- `analytics_confirmation_diagnostics`
 - `analytics_list_mutable_resources`
 - `analytics_get_mutation_schema`
 - `analytics_get_resource`
@@ -44,8 +45,8 @@ data streams, Measurement Protocol secrets, Google Ads links, data retention,
 and attribution settings.
 
 See [ANALYTICS_CRUD.md](ANALYTICS_CRUD.md) for the complete safety model,
-environment variables, allowlists, confirmation format, and Horizon deployment
-instructions.
+environment variables, allowlists, confirmation format, key rotation, and
+Horizon deployment instructions.
 
 ## Mutation safety summary
 
@@ -73,18 +74,21 @@ Batches are:
 }
 ```
 
-Replay protection is:
+Replay and cross-instance behavior is:
 
 ```json
 {
+  "cross_instance_valid": null,
+  "cross_instance_requirement": "MATCHING_CONFIRMATION_KEY_ID",
   "replay_protection": "BEST_EFFORT_PROCESS_LOCAL",
   "globally_single_use": false
 }
 ```
 
-`analytics_safety_status` is read-only, reloads the environment on every call,
-and never exposes the confirmation secret, ADC JSON, OAuth credentials, or
-tokens.
+`analytics_safety_status` and `analytics_confirmation_diagnostics` are
+read-only. They expose only non-secret key and process identifiers, never the
+confirmation secret, ADC JSON, OAuth credentials, access tokens, or synthetic
+confirmation tokens.
 
 ## Horizon deployment
 
@@ -100,7 +104,7 @@ Required credential secret:
 GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64=<base64 service-account JSON>
 ```
 
-Protected mutation configuration is documented in
+Protected mutation and confirmation-key configuration is documented in
 [ANALYTICS_CRUD.md](ANALYTICS_CRUD.md).
 
 ## Local setup
