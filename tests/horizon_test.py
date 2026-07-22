@@ -56,8 +56,8 @@ class HorizonServerTest(unittest.TestCase):
             server = create_horizon_server()
 
         self.assertIsInstance(server, FastMCP)
-        names = {
-            component.name
+        components = {
+            component.name: component
             for key, component in server.local_provider._components.items()
             if key.startswith("tool:")
         }
@@ -72,6 +72,7 @@ class HorizonServerTest(unittest.TestCase):
                 "run_realtime_report",
                 "run_funnel_report",
                 "run_conversions_report",
+                "analytics_safety_status",
                 "analytics_list_mutable_resources",
                 "analytics_get_mutation_schema",
                 "analytics_get_resource",
@@ -82,7 +83,10 @@ class HorizonServerTest(unittest.TestCase):
                 "analytics_delete_resource",
                 "analytics_batch_operations",
             },
-            names,
+            set(components),
+        )
+        self.assertTrue(
+            components["analytics_safety_status"].annotations.readOnlyHint
         )
 
     def test_partial_oauth_configuration_is_rejected(self):

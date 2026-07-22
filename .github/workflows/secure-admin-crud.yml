@@ -34,11 +34,14 @@ jobs:
           python -m pip install black pyfakefs coverage
 
       - name: Compile
-        run: python -m compileall -q analytics_mcp tests
+        run: python -m compileall -q analytics_mcp tests horizon_server.py
 
       - name: Formatting
-        run: black --check -l 80 analytics_mcp tests
+        run: black --check -l 80 analytics_mcp tests horizon_server.py
 
       - name: Tests
         run: |
           python -m unittest discover --buffer -s tests -p '*_test.py'
+
+      - name: Inspect Horizon entrypoint
+        run: fastmcp inspect horizon_server.py:mcp

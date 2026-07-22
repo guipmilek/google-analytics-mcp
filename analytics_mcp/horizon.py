@@ -32,6 +32,7 @@ from analytics_mcp.tools.admin.crud_hardened import (
     analytics_get_resource,
     analytics_list_mutable_resources,
     analytics_list_resources,
+    analytics_safety_status,
     analytics_update_resource,
 )
 from analytics_mcp.tools.admin.crud_safety import CrudSafetyError
@@ -73,6 +74,7 @@ _READ_TOOLS: tuple[tuple[ToolFunction, str | None], ...] = (
     (run_realtime_report, _run_realtime_report_description()),
     (run_funnel_report, _run_funnel_report_description()),
     (run_conversions_report, _run_conversions_report_description()),
+    (analytics_safety_status, None),
     (analytics_list_mutable_resources, None),
     (analytics_get_mutation_schema, None),
     (analytics_get_resource, None),
@@ -172,9 +174,7 @@ def _with_structured_errors(function: ToolFunction) -> ToolFunction:
                     **exc.as_dict(),
                 }
             }
-        except (
-            Exception
-        ) as exc:  # The prior low-level server serialized all errors.
+        except Exception as exc:  # The low-level server serializes all errors.
             return {
                 "error": {
                     "type": type(exc).__name__,

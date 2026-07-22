@@ -95,7 +95,7 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "archive": "ArchiveCustomDimensionRequest",
         },
         request_resource_field="custom_dimension",
-        risk_gate=None,
+        risk_gate="custom_dimension",
         fields=(
             FieldSpec(
                 "name",
@@ -146,7 +146,7 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "archive": "ArchiveCustomMetricRequest",
         },
         request_resource_field="custom_metric",
-        risk_gate=None,
+        risk_gate="custom_metric",
         fields=(
             FieldSpec(
                 "name",

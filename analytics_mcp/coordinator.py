@@ -5,12 +5,6 @@
 # You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Module declaring the singleton MCP server.
 
@@ -35,6 +29,7 @@ from analytics_mcp.tools.admin.crud_hardened import (
     analytics_get_resource,
     analytics_list_mutable_resources,
     analytics_list_resources,
+    analytics_safety_status,
     analytics_update_resource,
 )
 from analytics_mcp.tools.admin.info import (
@@ -88,6 +83,7 @@ tools = [
     run_realtime_report_with_description,
     run_funnel_report_with_description,
     run_conversions_report_with_description,
+    FunctionTool(analytics_safety_status),
     FunctionTool(analytics_list_mutable_resources),
     FunctionTool(analytics_get_mutation_schema),
     FunctionTool(analytics_get_resource),

@@ -1,207 +1,173 @@
 # Google Analytics MCP Server (Experimental)
 
-[![PyPI version](https://img.shields.io/pypi/v/analytics-mcp.svg)](https://pypi.org/project/analytics-mcp/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![GitHub branch check runs](https://img.shields.io/github/check-runs/googleanalytics/google-analytics-mcp/main)](https://github.com/googleanalytics/google-analytics-mcp/actions?query=branch%3Amain++)
-[![PyPI - Downloads](https://img.shields.io/pypi/dm/analytics-mcp)](https://pypi.org/project/analytics-mcp/)
-[![GitHub stars](https://img.shields.io/github/stars/googleanalytics/google-analytics-mcp?style=social)](https://github.com/googleanalytics/google-analytics-mcp/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/googleanalytics/google-analytics-mcp?style=social)](https://github.com/googleanalytics/google-analytics-mcp/network/members)
-[![YouTube Video Views](https://img.shields.io/youtube/views/PT4wGPxWiRQ)](https://www.youtube.com/watch?v=PT4wGPxWiRQ)
+This repository contains an MCP server for the Google Analytics Admin API and
+Data API. This fork also includes a protected administrative CRUD facade and a
+native Prefect Horizon/FastMCP entrypoint.
 
-This repo contains the source code for running a local
-[MCP](https://modelcontextprotocol.io) server that interacts with APIs for
-[Google Analytics](https://support.google.com/analytics).
+## Tools
 
-Join the discussion and ask questions in the
-[🤖-analytics-mcp channel](https://discord.com/channels/971845904002871346/1398002598665257060)
-on Discord.
+### Account and property information
 
-## Tools 🛠️
+- `get_account_summaries`
+- `get_property_details`
+- `list_google_ads_links`
+- `list_property_annotations`
 
-The server uses the
-[Google Analytics Admin API](https://developers.google.com/analytics/devguides/config/admin/v1)
-and
-[Google Analytics Data API](https://developers.google.com/analytics/devguides/reporting/data/v1)
-to provide several
-[Tools](https://modelcontextprotocol.io/docs/concepts/tools) for use with LLMs.
+### Reporting
 
-### Retrieve account and property information 🟠
+- `run_report`
+- `run_realtime_report`
+- `run_funnel_report`
+- `run_conversions_report`
+- `get_custom_dimensions_and_metrics`
 
-- `get_account_summaries`: Retrieves information about the user's Google
-  Analytics accounts and properties.
-- `get_property_details`: Returns details about a property.
-- `list_google_ads_links`: Returns a list of links to Google Ads accounts for
-  a property.
+### Protected Admin API
 
-### Run core reports 📙
+Read-only inspection:
 
-- `run_report`: Runs a Google Analytics report using the Data API.
-- `run_funnel_report`: Runs a Google Analytics funnel report using the Data API.
-- `get_custom_dimensions_and_metrics`: Retrieves the custom dimensions and
-  metrics for a specific property.
+- `analytics_safety_status`
+- `analytics_list_mutable_resources`
+- `analytics_get_mutation_schema`
+- `analytics_get_resource`
+- `analytics_list_resources`
 
-### Run realtime reports ⏳
+Protected mutations:
 
-- `run_realtime_report`: Runs a Google Analytics realtime report using the
-  Data API.
+- `analytics_create_resource`
+- `analytics_update_resource`
+- `analytics_archive_resource`
+- `analytics_delete_resource`
+- `analytics_batch_operations`
 
-## Setup instructions 🔧
+The mutation facade supports custom dimensions, custom metrics, key events,
+data streams, Measurement Protocol secrets, Google Ads links, data retention,
+and attribution settings.
 
-✨ Watch the [Google Analytics MCP Setup
-Tutorial](https://youtu.be/nS8HLdwmVlY) on YouTube for a step-by-step
-walkthrough of these instructions.
+See [ANALYTICS_CRUD.md](ANALYTICS_CRUD.md) for the complete safety model,
+environment variables, allowlists, confirmation format, and Horizon deployment
+instructions.
 
-[![Watch the video](https://img.youtube.com/vi/nS8HLdwmVlY/mqdefault.jpg)](https://www.youtube.com/watch?v=nS8HLdwmVlY)
+## Mutation safety summary
 
-Setup involves the following steps:
+The deployment is fail-closed by default.
 
-1.  Configure Python.
-1.  Configure credentials for Google Analytics.
-1.  Configure Gemini.
+A mutation requires:
 
-### Configure Python 🐍
+1. `GOOGLE_ANALYTICS_ADMIN_MUTATIONS_ENABLED=true`;
+2. the relevant action gate, such as `GOOGLE_ANALYTICS_ALLOW_UPDATE=true`;
+3. the resource-specific gate;
+4. account and property allowlist approval;
+5. stream or Google Ads customer allowlist approval when applicable;
+6. `validate_only=true` connector preflight;
+7. the unexpired HMAC confirmation returned by that exact preflight.
 
-[Install pipx](https://pipx.pypa.io/stable/#install-pipx).
+`validate_only=true` is a connector preflight. The Google Analytics Admin API
+does not expose a generic native validate-only mutation mode.
 
-### Enable APIs in your project ✅
+Batches are:
 
-[Follow the instructions](https://support.google.com/googleapi/answer/6158841)
-to enable the following APIs in your Google Cloud project:
-
-- [Google Analytics Admin API](https://console.cloud.google.com/apis/library/analyticsadmin.googleapis.com)
-- [Google Analytics Data API](https://console.cloud.google.com/apis/library/analyticsdata.googleapis.com)
-
-### Configure credentials 🔑
-
-Configure your [Application Default Credentials
-(ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc).
-Make sure the credentials are for a user with access to your Google Analytics
-accounts or properties.
-
-Credentials must include the Google Analytics read-only scope:
-
+```json
+{
+  "atomic": false,
+  "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR"
+}
 ```
+
+Replay protection is:
+
+```json
+{
+  "replay_protection": "BEST_EFFORT_PROCESS_LOCAL",
+  "globally_single_use": false
+}
+```
+
+`analytics_safety_status` is read-only, reloads the environment on every call,
+and never exposes the confirmation secret, ADC JSON, OAuth credentials, or
+tokens.
+
+## Horizon deployment
+
+Use:
+
+```text
+horizon_server.py:mcp
+```
+
+Required credential secret:
+
+```env
+GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64=<base64 service-account JSON>
+```
+
+Protected mutation configuration is documented in
+[ANALYTICS_CRUD.md](ANALYTICS_CRUD.md).
+
+## Local setup
+
+Python 3.10 or newer is required.
+
+Install with the development dependencies:
+
+```shell
+pip install -e ".[dev]"
+```
+
+Enable the following Google Cloud APIs:
+
+- Google Analytics Admin API
+- Google Analytics Data API
+
+Configure Application Default Credentials with the read-only scope for reports
+and the edit scope only when protected mutation execution is required:
+
+```text
 https://www.googleapis.com/auth/analytics.readonly
+https://www.googleapis.com/auth/analytics.edit
 ```
 
-Check out
-[Manage OAuth Clients](https://support.google.com/cloud/answer/15549257)
-for how to create an OAuth client.
+## Gemini configuration
 
-Here are some sample `gcloud` commands you might find useful:
+Example:
 
-- Set up ADC using user credentials and an OAuth desktop or web client after
-  downloading the client JSON to `YOUR_CLIENT_JSON_FILE`.
-
-  ```shell
-  gcloud auth application-default login \
-    --scopes https://www.googleapis.com/auth/analytics.readonly,https://www.googleapis.com/auth/cloud-platform \
-    --client-id-file=YOUR_CLIENT_JSON_FILE
-  ```
-
-- Set up ADC using service account impersonation.
-
-  ```shell
-  gcloud auth application-default login \
-    --impersonate-service-account=SERVICE_ACCOUNT_EMAIL \
-    --scopes=https://www.googleapis.com/auth/analytics.readonly,https://www.googleapis.com/auth/cloud-platform
-  ```
-
-When the `gcloud auth application-default` command completes, copy the
-`PATH_TO_CREDENTIALS_JSON` file location printed to the console in the
-following message. You'll need this for the next step!
-
-```
-Credentials saved to file: [PATH_TO_CREDENTIALS_JSON]
-```
-
-### Configure Gemini
-
-1.  Install [Gemini
-    CLI](https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/installation.md)
-    or [Gemini Code
-    Assist](https://marketplace.visualstudio.com/items?itemName=Google.geminicodeassist).
-
-1.  Create or edit the file at `~/.gemini/settings.json`, adding your server
-    to the `mcpServers` list.
-
-    Replace `PATH_TO_CREDENTIALS_JSON` with the path you copied in the previous
-    step.
-
-    We also recommend that you add a `GOOGLE_CLOUD_PROJECT` attribute to the
-    `env` object. Replace `YOUR_PROJECT_ID` in the following example with the
-    [project ID](https://support.google.com/googleapi/answer/7014113) of your
-    Google Cloud project.
-
-    ```json
-    {
-      "mcpServers": {
-        "analytics-mcp": {
-          "command": "pipx",
-          "args": ["run", "analytics-mcp"],
-          "env": {
-            "GOOGLE_APPLICATION_CREDENTIALS": "PATH_TO_CREDENTIALS_JSON",
-            "GOOGLE_PROJECT_ID": "YOUR_PROJECT_ID"
-          }
-        }
+```json
+{
+  "mcpServers": {
+    "analytics-mcp": {
+      "command": "pipx",
+      "args": ["run", "analytics-mcp"],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "PATH_TO_CREDENTIALS_JSON",
+        "GOOGLE_PROJECT_ID": "YOUR_PROJECT_ID"
       }
     }
-    ```
+  }
+}
+```
 
-### Configure Claude Code
+## Claude Code configuration
 
-1.  Add the MCP server with the following command:
+```shell
+claude mcp add analytics-mcp \
+  --scope user \
+  -e "GOOGLE_APPLICATION_CREDENTIALS=PATH_TO_CREDENTIALS_JSON" \
+  -e "GOOGLE_PROJECT_ID=YOUR_PROJECT_ID" \
+  -- pipx run analytics-mcp
+```
 
-    Replace `PATH_TO_CREDENTIALS_JSON` with the path you copied in the previous
-    step, and replace `YOUR_PROJECT_ID` with the
-    [project ID](https://support.google.com/googleapi/answer/7014113) of your
-    Google Cloud project.
+## Validation
 
-    ```shell
-    claude mcp add analytics-mcp \
-      --scope user \
-      -e "GOOGLE_APPLICATION_CREDENTIALS=PATH_TO_CREDENTIALS_JSON" \
-      -e "GOOGLE_PROJECT_ID=YOUR_PROJECT_ID" \
-      -- pipx run analytics-mcp
-    ```
+Recommended checks before merging:
 
-## Try it out 🥼
+```shell
+python -m compileall analytics_mcp horizon_server.py
+python -m unittest discover -s tests -p "*_test.py"
+black --check -l 80 analytics_mcp tests horizon_server.py
+fastmcp inspect horizon_server.py:mcp
+```
 
-Launch Gemini Code Assist or Gemini CLI and type `/mcp`. You should see
-`analytics-mcp` listed in the results.
+The tests use mocks and must not access a real Google Analytics property.
 
-Here are some sample prompts to get you started:
+## Contributing
 
-- Ask what the server can do:
-
-  ```
-  what can the analytics-mcp server do?
-  ```
-
-- Ask about a Google Analytics property
-
-  ```
-  Give me details about my Google Analytics property with 'xyz' in the name
-  ```
-
-- Prompt for analysis:
-
-  ```
-  what are the most popular events in my Google Analytics property in the last 180 days?
-  ```
-
-- Ask about signed-in users:
-
-  ```
-  were most of my users in the last 6 months logged in?
-  ```
-
-- Ask about property configuration:
-
-  ```
-  what are the custom dimensions and custom metrics in my property?
-  ```
-
-## Contributing ✨
-
-Contributions welcome! See the [Contributing Guide](CONTRIBUTING.md).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).

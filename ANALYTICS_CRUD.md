@@ -5,15 +5,22 @@ The tools use the Google Analytics Admin API and preserve the existing Data API
 reporting tools.
 
 The initial protected deployment scope is the Poli Steel Analytics account
-`401804063`, property `546475155`, and web stream `15297504355`. These numeric
-identifiers are allowlist values, not credentials or secrets.
+`401804063`, property `546475155`, web stream `15297504355`, and Google Ads
+customer `8448275903`. These numeric identifiers are allowlist values, not
+credentials or secrets.
 
 ## Tools
 
+Read-only safety and schema tools:
+
+- `analytics_safety_status`
 - `analytics_list_mutable_resources`
 - `analytics_get_mutation_schema`
 - `analytics_get_resource`
 - `analytics_list_resources`
+
+Protected mutation tools:
+
 - `analytics_create_resource`
 - `analytics_update_resource`
 - `analytics_archive_resource`
@@ -31,19 +38,39 @@ Supported resources:
 - `DataRetentionSettings`
 - `AttributionSettings` (Alpha, disabled by default)
 
+## Safety status
+
+`analytics_safety_status` is read-only and does not call Google Analytics APIs,
+run preflight, issue confirmations, or compute operation hashes. It reloads the
+environment on every call and reports:
+
+- global mutation state;
+- general action gates;
+- resource-specific gates;
+- account, property, stream, and Google Ads customer allowlists;
+- batch limit and confirmation TTL;
+- whether the confirmation secret is configured;
+- hash version and replay model;
+- non-atomic sequential execution semantics.
+
+The tool never returns the confirmation secret, ADC JSON, OAuth secrets, or
+access tokens.
+
 ## Validation model
 
 The Google Analytics Admin API does not expose a generic `validate_only`
 parameter comparable to Google Ads. In this connector, `validate_only=true`
 means a strict local preflight:
 
-1. allowlist and risk-gate validation;
-2. resource schema and field validation;
-3. enum and SDK request-object construction;
-4. current-resource or parent-collection read;
-5. precondition snapshot hashing;
-6. normalized operation hashing;
-7. signed HMAC confirmation issuance.
+1. global, action, and resource risk-gate validation;
+2. account, property, data-stream, and Google Ads customer allowlist validation;
+3. property parent-account read and precondition binding;
+4. resource schema and field validation;
+5. enum and SDK request-object construction;
+6. current-resource or parent-collection read;
+7. precondition snapshot hashing;
+8. normalized operation hashing;
+9. signed HMAC confirmation issuance.
 
 No Admin API mutation is sent during this preflight. The response explicitly
 reports:
@@ -58,8 +85,26 @@ reports:
 }
 ```
 
-Execution repeats the precondition reads. Any concurrent change alters the
-normalized payload hash and invalidates the confirmation.
+Execution repeats property-parent and resource precondition reads. A concurrent
+change alters the signed payload and invalidates the confirmation.
+
+Confirmations use:
+
+```text
+EXECUTE <32-character-operation-hash>.<signed-payload>.<signature>
+```
+
+Receipts are cross-instance verifiable while the secret remains identical, but
+replay blocking is process-local best effort:
+
+```json
+{
+  "replay_protection": "BEST_EFFORT_PROCESS_LOCAL",
+  "globally_single_use": false
+}
+```
+
+Receipts issued before a redeploy or safety-model change must be revalidated.
 
 ## Non-atomic batches
 
@@ -116,29 +161,53 @@ ADC; endpoint login and Google Analytics API authorization are separate layers.
 
 ## Environment
 
-Start with all mutation gates disabled:
+All gates default to `false`, all allowlists default to empty, the batch limit
+defaults to `10`, and the confirmation TTL defaults to `900` seconds.
+
+Fail-closed example:
 
 ```env
 GOOGLE_ANALYTICS_ADMIN_MUTATIONS_ENABLED=false
-GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS=401804063
-GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS=546475155
-GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS=15297504355
-GOOGLE_ANALYTICS_MAX_OPERATIONS_PER_REQUEST=10
 
-GOOGLE_ANALYTICS_CONFIRMATION_SECRET=<random secret of at least 32 bytes>
-GOOGLE_ANALYTICS_CONFIRMATION_TTL_SECONDS=900
-
+GOOGLE_ANALYTICS_ALLOW_CREATE=false
+GOOGLE_ANALYTICS_ALLOW_UPDATE=false
 GOOGLE_ANALYTICS_ALLOW_DELETE=false
 GOOGLE_ANALYTICS_ALLOW_ARCHIVE=false
+
 GOOGLE_ANALYTICS_ALLOW_PROPERTY_UPDATE=false
 GOOGLE_ANALYTICS_ALLOW_DATA_STREAM_CHANGES=false
 GOOGLE_ANALYTICS_ALLOW_KEY_EVENT_CHANGES=false
+GOOGLE_ANALYTICS_ALLOW_CUSTOM_DIMENSION_CHANGES=false
+GOOGLE_ANALYTICS_ALLOW_CUSTOM_METRIC_CHANGES=false
 GOOGLE_ANALYTICS_ALLOW_RETENTION_CHANGES=false
 GOOGLE_ANALYTICS_ALLOW_ATTRIBUTION_CHANGES=false
 GOOGLE_ANALYTICS_ALLOW_LINK_CHANGES=false
 GOOGLE_ANALYTICS_ALLOW_MEASUREMENT_PROTOCOL_SECRET_CHANGES=false
 GOOGLE_ANALYTICS_ALLOW_ALPHA_RESOURCES=false
+
+GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS=401804063
+GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS=546475155
+GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS=15297504355
+GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS=8448275903
+
+GOOGLE_ANALYTICS_MAX_OPERATIONS_PER_REQUEST=10
+GOOGLE_ANALYTICS_CONFIRMATION_TTL_SECONDS=900
+GOOGLE_ANALYTICS_CONFIRMATION_SECRET=<random secret of at least 32 bytes>
 ```
+
+To enable a mutation, the global gate, the action gate, and the applicable
+resource gate must all be enabled. For example, creating a custom dimension
+requires:
+
+```text
+GOOGLE_ANALYTICS_ADMIN_MUTATIONS_ENABLED=true
+GOOGLE_ANALYTICS_ALLOW_CREATE=true
+GOOGLE_ANALYTICS_ALLOW_CUSTOM_DIMENSION_CHANGES=true
+```
+
+A `GoogleAdsLink` create, update, or delete also requires its customer ID in
+`GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS`. Existing links outside the
+allowlist remain readable but cannot be mutated.
 
 The confirmation secret must be configured directly in the deployment
 platform. Do not reuse the Google Ads confirmation secret.
@@ -178,11 +247,6 @@ Validate a custom dimension creation:
 }
 ```
 
-A successful validation returns a confirmation in the form:
-
-```text
-EXECUTE <32-character-operation-hash>.<signed-payload>.<signature>
-```
-
-Execution must resubmit the same operation data with `validate_only=false` and
-the unexpired confirmation.
+A successful validation returns an unexpired signed confirmation. Execution
+must resubmit the exact same operation data with `validate_only=false` and that
+confirmation.
