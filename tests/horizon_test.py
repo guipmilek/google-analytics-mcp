@@ -73,6 +73,7 @@ class HorizonServerTest(unittest.TestCase):
                 "run_funnel_report",
                 "run_conversions_report",
                 "analytics_safety_status",
+                "analytics_confirmation_diagnostics",
                 "analytics_list_mutable_resources",
                 "analytics_get_mutation_schema",
                 "analytics_get_resource",
@@ -87,6 +88,11 @@ class HorizonServerTest(unittest.TestCase):
         )
         self.assertTrue(
             components["analytics_safety_status"].annotations.readOnlyHint
+        )
+        self.assertTrue(
+            components[
+                "analytics_confirmation_diagnostics"
+            ].annotations.readOnlyHint
         )
 
     def test_partial_oauth_configuration_is_rejected(self):
