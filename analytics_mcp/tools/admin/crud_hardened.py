@@ -51,7 +51,9 @@ def _harden_resource_registry() -> None:
 _harden_resource_registry()
 
 from analytics_mcp.tools.admin import crud as _crud  # noqa: E402
-from analytics_mcp.tools.admin.crud_registry import get_resource_spec  # noqa: E402
+from analytics_mcp.tools.admin.crud_registry import (
+    get_resource_spec,
+)  # noqa: E402
 
 analytics_get_mutation_schema = _crud.analytics_get_mutation_schema
 analytics_get_resource = _crud.analytics_get_resource
@@ -381,9 +383,7 @@ async def analytics_batch_operations(
     for index, operation in enumerate(normalized):
         attempted += 1
         try:
-            result = await asyncio.to_thread(
-                _safe_execute_one_sync, operation
-            )
+            result = await asyncio.to_thread(_safe_execute_one_sync, operation)
             result["operation_index"] = index
             result["execution_status"] = "SUCCEEDED"
             results.append(result)

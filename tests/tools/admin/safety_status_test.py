@@ -57,9 +57,7 @@ class AnalyticsSafetyStatusTest(unittest.TestCase):
 
     def test_status_reports_enabled_configuration_without_secret(self):
         environment = self._enabled_environment()
-        environment["GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS"] = (
-            "401804063,100"
-        )
+        environment["GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS"] = "401804063,100"
         with patch.dict(os.environ, environment, clear=True):
             result = asyncio.run(crud_safety.analytics_safety_status())
 
@@ -119,9 +117,7 @@ class AnalyticsSafetyStatusTest(unittest.TestCase):
         )
 
         environment = self._enabled_environment()
-        environment[
-            "GOOGLE_ANALYTICS_ALLOW_CUSTOM_DIMENSION_CHANGES"
-        ] = "false"
+        environment["GOOGLE_ANALYTICS_ALLOW_CUSTOM_DIMENSION_CHANGES"] = "false"
         with patch.dict(os.environ, environment, clear=True):
             config = crud_safety.load_safety_config()
             with self.assertRaises(crud_safety.CrudSafetyError) as context:
@@ -152,13 +148,9 @@ class AnalyticsSafetyStatusTest(unittest.TestCase):
             self.assertEqual("ACCOUNT_NOT_ALLOWED", context.exception.code)
 
     def test_google_ads_customer_allowlist(self):
-        with patch.dict(
-            os.environ, self._enabled_environment(), clear=True
-        ):
+        with patch.dict(os.environ, self._enabled_environment(), clear=True):
             config = crud_safety.load_safety_config()
-            crud_safety.validate_google_ads_customer_scope(
-                "8448275903", config
-            )
+            crud_safety.validate_google_ads_customer_scope("8448275903", config)
             with self.assertRaises(crud_safety.CrudSafetyError) as context:
                 crud_safety.validate_google_ads_customer_scope(
                     "7100427642", config
@@ -185,9 +177,7 @@ class AnalyticsSafetyStatusTest(unittest.TestCase):
             "data": {},
             "update_mask": [],
         }
-        with patch.dict(
-            os.environ, self._enabled_environment(), clear=True
-        ):
+        with patch.dict(os.environ, self._enabled_environment(), clear=True):
             config = crud_safety.load_safety_config()
             normalized = (
                 crud_hardened._validate_google_ads_link_operations_sync(
@@ -195,9 +185,7 @@ class AnalyticsSafetyStatusTest(unittest.TestCase):
                 )
             )
         get_sync.assert_called_once()
-        self.assertEqual(
-            "8448275903", normalized[0]["google_ads_customer_id"]
-        )
+        self.assertEqual("8448275903", normalized[0]["google_ads_customer_id"])
 
     def test_confirmation_is_bound_to_property_parent_context(self):
         first_payload = {
@@ -211,9 +199,7 @@ class AnalyticsSafetyStatusTest(unittest.TestCase):
             "account_id": "999",
             "property_parent_precondition_hash": "b" * 64,
         }
-        with patch.dict(
-            os.environ, self._enabled_environment(), clear=True
-        ):
+        with patch.dict(os.environ, self._enabled_environment(), clear=True):
             confirmation = crud_safety.issue_confirmation(
                 first_payload, "546475155", 900
             )["required_confirmation"]
