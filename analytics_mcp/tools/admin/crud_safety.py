@@ -32,6 +32,7 @@ _DEFAULT_TTL_SECONDS = 900
 _MAX_TTL_SECONDS = 3600
 _DEFAULT_MAX_OPERATIONS = 10
 _ABSOLUTE_MAX_OPERATIONS = 100
+_CONFIRMATION_SECRET_MINIMUM_BYTES = 32
 
 
 class CrudSafetyError(ValueError):
@@ -65,13 +66,18 @@ class SafetyConfig:
     allowed_account_ids: frozenset[str]
     allowed_property_ids: frozenset[str]
     allowed_data_stream_ids: frozenset[str]
+    allowed_google_ads_customer_ids: frozenset[str]
     max_operations: int
     confirmation_ttl_seconds: int
+    allow_create: bool
+    allow_update: bool
     allow_delete: bool
     allow_archive: bool
     allow_property_update: bool
     allow_data_stream_changes: bool
     allow_key_event_changes: bool
+    allow_custom_dimension_changes: bool
+    allow_custom_metric_changes: bool
     allow_retention_changes: bool
     allow_attribution_changes: bool
     allow_link_changes: bool
@@ -149,6 +155,9 @@ def load_safety_config() -> SafetyConfig:
         allowed_data_stream_ids=_env_ids(
             "GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS"
         ),
+        allowed_google_ads_customer_ids=_env_ids(
+            "GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS"
+        ),
         max_operations=_env_int(
             "GOOGLE_ANALYTICS_MAX_OPERATIONS_PER_REQUEST",
             _DEFAULT_MAX_OPERATIONS,
@@ -161,6 +170,8 @@ def load_safety_config() -> SafetyConfig:
             60,
             _MAX_TTL_SECONDS,
         ),
+        allow_create=_env_bool("GOOGLE_ANALYTICS_ALLOW_CREATE", False),
+        allow_update=_env_bool("GOOGLE_ANALYTICS_ALLOW_UPDATE", False),
         allow_delete=_env_bool("GOOGLE_ANALYTICS_ALLOW_DELETE", False),
         allow_archive=_env_bool("GOOGLE_ANALYTICS_ALLOW_ARCHIVE", False),
         allow_property_update=_env_bool(
@@ -171,6 +182,12 @@ def load_safety_config() -> SafetyConfig:
         ),
         allow_key_event_changes=_env_bool(
             "GOOGLE_ANALYTICS_ALLOW_KEY_EVENT_CHANGES", False
+        ),
+        allow_custom_dimension_changes=_env_bool(
+            "GOOGLE_ANALYTICS_ALLOW_CUSTOM_DIMENSION_CHANGES", False
+        ),
+        allow_custom_metric_changes=_env_bool(
+            "GOOGLE_ANALYTICS_ALLOW_CUSTOM_METRIC_CHANGES", False
         ),
         allow_retention_changes=_env_bool(
             "GOOGLE_ANALYTICS_ALLOW_RETENTION_CHANGES", False
@@ -189,6 +206,64 @@ def load_safety_config() -> SafetyConfig:
             "GOOGLE_ANALYTICS_ALLOW_ALPHA_RESOURCES", False
         ),
     )
+
+
+def safety_status_payload(config: SafetyConfig | None = None) -> Dict[str, Any]:
+    """Returns the public, secret-safe mutation safety status."""
+    resolved = config or load_safety_config()
+    secret = os.getenv("GOOGLE_ANALYTICS_CONFIRMATION_SECRET", "").encode(
+        "utf-8"
+    )
+    return {
+        "runtime": "PYTHON_FASTMCP_HORIZON",
+        "mutations_enabled": resolved.mutations_enabled,
+        "gates": {
+            "create": resolved.allow_create,
+            "update": resolved.allow_update,
+            "delete": resolved.allow_delete,
+            "archive": resolved.allow_archive,
+            "property_update": resolved.allow_property_update,
+            "data_stream": resolved.allow_data_stream_changes,
+            "key_event": resolved.allow_key_event_changes,
+            "custom_dimension": resolved.allow_custom_dimension_changes,
+            "custom_metric": resolved.allow_custom_metric_changes,
+            "retention": resolved.allow_retention_changes,
+            "attribution": resolved.allow_attribution_changes,
+            "link": resolved.allow_link_changes,
+            "measurement_protocol_secret": (
+                resolved.allow_measurement_protocol_secret_changes
+            ),
+            "alpha_resources": resolved.allow_alpha_resources,
+        },
+        "allowlists": {
+            "account_ids": sorted(resolved.allowed_account_ids),
+            "property_ids": sorted(resolved.allowed_property_ids),
+            "data_stream_ids": sorted(resolved.allowed_data_stream_ids),
+            "google_ads_customer_ids": sorted(
+                resolved.allowed_google_ads_customer_ids
+            ),
+        },
+        "max_operations_per_request": resolved.max_operations,
+        "confirmation_ttl_seconds": resolved.confirmation_ttl_seconds,
+        "confirmation_secret_configured": (
+            len(secret) >= _CONFIRMATION_SECRET_MINIMUM_BYTES
+        ),
+        "confirmation_secret_minimum_bytes": (
+            _CONFIRMATION_SECRET_MINIMUM_BYTES
+        ),
+        "operation_hash_version": _HASH_VERSION,
+        "replay_protection": "BEST_EFFORT_PROCESS_LOCAL",
+        "globally_single_use": False,
+        "atomic": False,
+        "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
+        "admin_api_validate_only_supported": False,
+        "validation_kind": "CONNECTOR_PREFLIGHT",
+    }
+
+
+async def analytics_safety_status() -> Dict[str, Any]:
+    """Reports current mutation gates and allowlists without calling Google APIs."""
+    return safety_status_payload()
 
 
 def canonical_json(value: Any) -> str:
@@ -242,7 +317,7 @@ def _b64url_decode_canonical(value: str) -> bytes:
 def _confirmation_secret() -> bytes:
     raw = os.getenv("GOOGLE_ANALYTICS_CONFIRMATION_SECRET", "")
     secret = raw.encode("utf-8")
-    if len(secret) < 32:
+    if len(secret) < _CONFIRMATION_SECRET_MINIMUM_BYTES:
         raise CrudSafetyError(
             "CONFIRMATION_SECRET_MISSING",
             "GOOGLE_ANALYTICS_CONFIRMATION_SECRET must be at least 32 bytes.",
@@ -267,7 +342,7 @@ def issue_confirmation(
     digest = operation_hash(normalized_payload)
     issued_at = int(time.time())
     expires_at = issued_at + ttl_seconds
-    token_payload = {
+    token_payload: Dict[str, Any] = {
         "exp": expires_at,
         "hash": digest,
         "iat": issued_at,
@@ -276,6 +351,13 @@ def issue_confirmation(
         "v": 1,
         "verb": "EXECUTE",
     }
+    account_id = normalized_payload.get("account_id")
+    if isinstance(account_id, str) and account_id:
+        token_payload["aid"] = account_id
+    parent_hash = normalized_payload.get("property_parent_precondition_hash")
+    if isinstance(parent_hash, str) and parent_hash:
+        token_payload["pph"] = parent_hash
+
     encoded_payload = _b64url_encode(
         canonical_json(token_payload).encode("utf-8")
     )
@@ -348,6 +430,29 @@ def verify_and_register_confirmation(
         "verb": "EXECUTE",
     }
     observed = {key: payload.get(key) for key in expected}
+
+    expected_account = normalized_payload.get("account_id")
+    expected_parent_hash = normalized_payload.get(
+        "property_parent_precondition_hash"
+    )
+    if expected_account is not None and payload.get("aid") != expected_account:
+        raise CrudSafetyError(
+            "PROPERTY_PARENT_ACCOUNT_CHANGED",
+            "The property parent account changed after validation.",
+            {
+                "expected_account_id": payload.get("aid"),
+                "observed_account_id": expected_account,
+            },
+        )
+    if (
+        expected_parent_hash is not None
+        and payload.get("pph") != expected_parent_hash
+    ):
+        raise CrudSafetyError(
+            "PROPERTY_PARENT_ACCOUNT_CHANGED",
+            "The property parent account changed after validation.",
+        )
+
     if digest != expected_hash or observed != expected:
         raise CrudSafetyError(
             "CONFIRMATION_MISMATCH",
@@ -389,7 +494,7 @@ def verify_and_register_confirmation(
 
 
 def extract_property_ids(value: Any) -> frozenset[str]:
-    """Recursively extracts property IDs from strings in a payload."""
+    """Recursively extracts property IDs from payload values."""
     found: set[str] = set()
 
     def visit(node: Any) -> None:
@@ -407,6 +512,42 @@ def extract_property_ids(value: Any) -> frozenset[str]:
 
     visit(value)
     return frozenset(found)
+
+
+def validate_account_scope(account_id: str, config: SafetyConfig) -> None:
+    """Enforces the Analytics account mutation allowlist."""
+    if not config.allowed_account_ids:
+        raise CrudSafetyError(
+            "ACCOUNT_ALLOWLIST_EMPTY",
+            "GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS is not configured.",
+        )
+    if account_id not in config.allowed_account_ids:
+        raise CrudSafetyError(
+            "ACCOUNT_NOT_ALLOWED",
+            f"Account {account_id} is not in the mutation allowlist.",
+        )
+
+
+def validate_google_ads_customer_scope(
+    customer_id: str,
+    config: SafetyConfig,
+) -> None:
+    """Enforces the Google Ads customer allowlist for link mutations."""
+    if not customer_id or not customer_id.isdigit():
+        raise CrudSafetyError(
+            "INVALID_GOOGLE_ADS_CUSTOMER_ID",
+            "Google Ads customer_id must be numeric.",
+        )
+    if not config.allowed_google_ads_customer_ids:
+        raise CrudSafetyError(
+            "GOOGLE_ADS_CUSTOMER_ALLOWLIST_EMPTY",
+            "GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS is not configured.",
+        )
+    if customer_id not in config.allowed_google_ads_customer_ids:
+        raise CrudSafetyError(
+            "GOOGLE_ADS_CUSTOMER_NOT_ALLOWED",
+            f"Google Ads customer {customer_id} is not in the mutation allowlist.",
+        )
 
 
 def validate_property_scope(
@@ -481,6 +622,16 @@ def enforce_action_gates(
             "MUTATIONS_DISABLED",
             "Google Analytics Admin mutations are disabled.",
         )
+    if action == "create" and not config.allow_create:
+        raise CrudSafetyError(
+            "CREATE_DISABLED",
+            "Create operations are disabled by GOOGLE_ANALYTICS_ALLOW_CREATE.",
+        )
+    if action == "update" and not config.allow_update:
+        raise CrudSafetyError(
+            "UPDATE_DISABLED",
+            "Update operations are disabled by GOOGLE_ANALYTICS_ALLOW_UPDATE.",
+        )
     if action == "delete" and not config.allow_delete:
         raise CrudSafetyError(
             "DELETE_DISABLED",
@@ -501,6 +652,8 @@ def enforce_action_gates(
         "property": config.allow_property_update,
         "data_stream": config.allow_data_stream_changes,
         "key_event": config.allow_key_event_changes,
+        "custom_dimension": config.allow_custom_dimension_changes,
+        "custom_metric": config.allow_custom_metric_changes,
         "retention": config.allow_retention_changes,
         "attribution": config.allow_attribution_changes,
         "link": config.allow_link_changes,
