@@ -20,6 +20,9 @@ from google.adk.tools.mcp_tool.conversion_utils import adk_to_mcp_tool_type
 from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 
+from analytics_mcp.tools.admin.confirmation_keys import (
+    analytics_confirmation_diagnostics,
+)
 from analytics_mcp.tools.admin.crud_hardened import (
     analytics_archive_resource,
     analytics_batch_operations,
@@ -84,6 +87,7 @@ tools = [
     run_funnel_report_with_description,
     run_conversions_report_with_description,
     FunctionTool(analytics_safety_status),
+    FunctionTool(analytics_confirmation_diagnostics),
     FunctionTool(analytics_list_mutable_resources),
     FunctionTool(analytics_get_mutation_schema),
     FunctionTool(analytics_get_resource),
