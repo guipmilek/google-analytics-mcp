@@ -10,17 +10,48 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping
+import asyncio
+from dataclasses import replace
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Mapping, Sequence
 
+from google.analytics import admin_v1beta
 from google.api_core import exceptions as google_exceptions
 
-from analytics_mcp.tools.admin import crud as _crud
-from analytics_mcp.tools.admin.crud_registry import get_resource_spec
+from analytics_mcp.tools.admin import crud_registry as _registry
 from analytics_mcp.tools.admin.crud_safety import (
     CrudSafetyError,
+    analytics_safety_status,
+    issue_confirmation,
     load_safety_config,
+    snapshot_hash,
+    validate_account_scope,
+    validate_google_ads_customer_scope,
+    validate_operation_count,
+    validate_property_scope,
     validate_stream_scope,
+    verify_and_register_confirmation,
 )
+from analytics_mcp.tools.client import create_admin_api_client
+from analytics_mcp.tools.utils import construct_property_rn, proto_to_dict
+
+
+def _harden_resource_registry() -> None:
+    """Adds dedicated gates without changing the upstream registry layout."""
+    hardened = []
+    for spec in _registry._RESOURCE_SPECS:
+        if spec.name == "CustomDimension":
+            spec = replace(spec, risk_gate="custom_dimension")
+        elif spec.name == "CustomMetric":
+            spec = replace(spec, risk_gate="custom_metric")
+        hardened.append(spec)
+    _registry._RESOURCE_SPECS = tuple(hardened)
+
+
+_harden_resource_registry()
+
+from analytics_mcp.tools.admin import crud as _crud  # noqa: E402
+from analytics_mcp.tools.admin.crud_registry import get_resource_spec  # noqa: E402
 
 analytics_get_mutation_schema = _crud.analytics_get_mutation_schema
 analytics_get_resource = _crud.analytics_get_resource
@@ -92,9 +123,6 @@ def _safe_execute_one_sync(operation: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-# The core batch resolves this global when it starts each operation. Replacing it
-# here preserves the public CRUD API while separating API dispatch from the
-# best-effort read that follows it.
 _crud._execute_one_sync = _safe_execute_one_sync
 
 
@@ -117,6 +145,162 @@ def _validate_data_stream_mutation_scope(
                 "resource_name is required for DataStream mutations.",
             )
         validate_stream_scope(resource_name, property_num, config)
+
+
+def _read_property_sync(property_id: str) -> Dict[str, Any]:
+    request = admin_v1beta.GetPropertyRequest(
+        name=construct_property_rn(property_id)
+    )
+    response = create_admin_api_client().get_property(request=request)
+    return proto_to_dict(response)
+
+
+def _account_context_sync(property_id: str, config) -> Dict[str, str]:
+    """Reads and validates the parent Analytics account for the property."""
+    property_data = _read_property_sync(property_id)
+    parent = str(property_data.get("parent", ""))
+    if not parent.startswith("accounts/"):
+        raise CrudSafetyError(
+            "INVALID_PROPERTY_PARENT",
+            "The Analytics property did not expose a valid parent account.",
+            {"parent": parent},
+        )
+    account_id = parent.split("/", 1)[1]
+    if not account_id.isdigit():
+        raise CrudSafetyError(
+            "INVALID_PROPERTY_PARENT",
+            "The Analytics property parent account is not numeric.",
+            {"parent": parent},
+        )
+    validate_account_scope(account_id, config)
+    parent_snapshot = {
+        "property_name": property_data.get("name"),
+        "parent": parent,
+    }
+    return {
+        "account_id": account_id,
+        "property_parent": parent,
+        "property_parent_precondition_hash": snapshot_hash(parent_snapshot),
+    }
+
+
+def _validate_google_ads_link_operations_sync(
+    operations: Sequence[Mapping[str, Any]],
+    config,
+) -> List[Dict[str, Any]]:
+    """Binds Google Ads link operations to an authorized customer ID."""
+    normalized: List[Dict[str, Any]] = []
+    link_spec = get_resource_spec("GoogleAdsLink")
+    for item in operations:
+        operation = dict(item)
+        if operation.get("resource") != "GoogleAdsLink":
+            normalized.append(operation)
+            continue
+
+        action = str(operation.get("action"))
+        if action == "create":
+            customer_id = str(operation.get("data", {}).get("customer_id", ""))
+        else:
+            resource_name = operation.get("resource_name")
+            if not isinstance(resource_name, str) or not resource_name:
+                raise CrudSafetyError(
+                    "RESOURCE_NAME_REQUIRED",
+                    "resource_name is required for GoogleAdsLink mutations.",
+                )
+            current = _crud._get_sync(link_spec, resource_name)
+            customer_id = str(current.get("customer_id", ""))
+
+        validate_google_ads_customer_scope(customer_id, config)
+        operation["google_ads_customer_id"] = customer_id
+        normalized.append(operation)
+    return normalized
+
+
+def _signed_payload(
+    property_num: str,
+    account_context: Mapping[str, str],
+    normalized: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "property_id": property_num,
+        "account_id": account_context["account_id"],
+        "property_parent_precondition_hash": account_context[
+            "property_parent_precondition_hash"
+        ],
+        "operations": list(normalized),
+        "atomic": False,
+        "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
+    }
+
+
+def _operation_scope(operations: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    return _crud._operation_scope(operations)
+
+
+def _iso_time(epoch: int) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def _validation_response(
+    property_num: str,
+    account_context: Mapping[str, str],
+    normalized: List[Dict[str, Any]],
+    config,
+) -> Dict[str, Any]:
+    signed_payload = _signed_payload(property_num, account_context, normalized)
+    receipt = issue_confirmation(
+        signed_payload,
+        property_num,
+        config.confirmation_ttl_seconds,
+    )
+    expires_epoch = receipt.pop("confirmation_expires_at_epoch")
+    response = {
+        "account_id": account_context["account_id"],
+        "property_id": property_num,
+        "mode": "VALIDATE_ONLY",
+        "validation_kind": "CONNECTOR_PREFLIGHT",
+        "admin_api_validate_only_supported": False,
+        "validation_status": "PASSED",
+        "validated": True,
+        "validated_in_current_call": True,
+        "execution_attempted": False,
+        "executed": False,
+        "execution_status": "NOT_EXECUTED",
+        "operation_count": len(normalized),
+        "normalized_operations": normalized,
+        "operation_scope": _operation_scope(normalized),
+        "confirmation_expires_at": _iso_time(expires_epoch),
+        "verification": {
+            "sdk_request_objects_built": True,
+            "precondition_reads_performed": True,
+            "property_parent_account_verified": True,
+            "google_ads_customer_allowlist_verified": any(
+                item.get("resource") == "GoogleAdsLink" for item in normalized
+            ),
+            "admin_api_mutation_sent": False,
+            "post_mutation_read_performed": False,
+        },
+    }
+    response.update(receipt)
+    receipt_data = response.get("validation_receipt", {})
+    receipt_data["expires_at"] = response["confirmation_expires_at"]
+    receipt_data.pop("expires_at_epoch", None)
+    return response
+
+
+def _known_rejection(exc: Exception) -> bool:
+    return isinstance(
+        exc,
+        (
+            google_exceptions.InvalidArgument,
+            google_exceptions.PermissionDenied,
+            google_exceptions.NotFound,
+            google_exceptions.AlreadyExists,
+            google_exceptions.FailedPrecondition,
+            google_exceptions.Unauthenticated,
+            CrudSafetyError,
+        ),
+    )
 
 
 def _add_verification_summary(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -151,12 +335,117 @@ async def analytics_batch_operations(
 ) -> Dict[str, Any]:
     """Validates or executes a hardened, non-atomic Admin API batch."""
     _validate_data_stream_mutation_scope(property_id, operations)
-    result = await _crud.analytics_batch_operations(
-        property_id=property_id,
-        operations=operations,
-        validate_only=validate_only,
-        confirmation=confirmation,
+    _, property_num = _crud._property_parts(property_id)
+    config = load_safety_config()
+    materialized = validate_operation_count(operations, config)
+    validate_property_scope(property_num, materialized, config)
+
+    account_context = await asyncio.to_thread(
+        _account_context_sync, property_num, config
     )
+    normalized = await asyncio.to_thread(
+        _crud._normalize_batch_sync,
+        property_num,
+        materialized,
+        config,
+    )
+    normalized = await asyncio.to_thread(
+        _validate_google_ads_link_operations_sync,
+        normalized,
+        config,
+    )
+
+    if validate_only:
+        return _validation_response(
+            property_num,
+            account_context,
+            normalized,
+            config,
+        )
+
+    if not confirmation:
+        raise CrudSafetyError(
+            "CONFIRMATION_REQUIRED",
+            "A signed confirmation from a prior validation is required.",
+        )
+
+    signed_payload = _signed_payload(property_num, account_context, normalized)
+    confirmation_info = verify_and_register_confirmation(
+        confirmation,
+        signed_payload,
+        property_num,
+    )
+
+    results: List[Dict[str, Any]] = []
+    attempted = 0
+    for index, operation in enumerate(normalized):
+        attempted += 1
+        try:
+            result = await asyncio.to_thread(
+                _safe_execute_one_sync, operation
+            )
+            result["operation_index"] = index
+            result["execution_status"] = "SUCCEEDED"
+            results.append(result)
+        except Exception as exc:
+            rejected = _known_rejection(exc)
+            error = {
+                "operation_index": index,
+                "action": operation["action"],
+                "resource": operation["resource"],
+                "resource_name": operation.get("resource_name"),
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "execution_state": "NOT_EXECUTED" if rejected else "UNKNOWN",
+                "execution_may_have_completed": not rejected,
+                "automatic_retry_safe": False,
+            }
+            return {
+                "account_id": account_context["account_id"],
+                "property_id": property_num,
+                "mode": "EXECUTE",
+                "validation_status": "PRIOR_VALIDATION_VERIFIED",
+                "execution_attempted": True,
+                "executed": False if not results and rejected else None,
+                "execution_status": (
+                    "FAILED"
+                    if not results and rejected
+                    else "PARTIAL_OR_UNKNOWN"
+                ),
+                "atomic": False,
+                "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
+                "operation_count": len(normalized),
+                "operations_attempted": attempted,
+                "operations_completed": len(results),
+                "operations_not_attempted": len(normalized) - attempted,
+                "results": results,
+                "error": error,
+                "operation_scope": _operation_scope(normalized),
+                **confirmation_info,
+            }
+
+    result = {
+        "account_id": account_context["account_id"],
+        "property_id": property_num,
+        "mode": "EXECUTE",
+        "validation_status": "PRIOR_VALIDATION_VERIFIED",
+        "execution_attempted": True,
+        "executed": True,
+        "execution_status": "SUCCEEDED",
+        "atomic": False,
+        "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
+        "operation_count": len(normalized),
+        "operations_attempted": len(normalized),
+        "operations_completed": len(normalized),
+        "operations_not_attempted": 0,
+        "results": results,
+        "operation_scope": _operation_scope(normalized),
+        "verification": {
+            "post_execution_reads_performed": True,
+            "claims_limited_to_requested_resources": True,
+        },
+        **confirmation_info,
+    }
     return _add_verification_summary(result)
 
 
