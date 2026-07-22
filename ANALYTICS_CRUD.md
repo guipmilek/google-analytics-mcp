@@ -14,6 +14,7 @@ credentials or secrets.
 Read-only safety and schema tools:
 
 - `analytics_safety_status`
+- `analytics_confirmation_diagnostics`
 - `analytics_list_mutable_resources`
 - `analytics_get_mutation_schema`
 - `analytics_get_resource`
@@ -38,7 +39,7 @@ Supported resources:
 - `DataRetentionSettings`
 - `AttributionSettings` (Alpha, disabled by default)
 
-## Safety status
+## Safety status and confirmation diagnostics
 
 `analytics_safety_status` is read-only and does not call Google Analytics APIs,
 run preflight, issue confirmations, or compute operation hashes. It reloads the
@@ -49,12 +50,30 @@ environment on every call and reports:
 - resource-specific gates;
 - account, property, stream, and Google Ads customer allowlists;
 - batch limit and confirmation TTL;
-- whether the confirmation secret is configured;
-- hash version and replay model;
+- whether current and previous confirmation secrets are configured and valid;
+- non-secret confirmation key identifiers;
+- the current process instance identifier;
+- hash, token, replay, and cross-instance requirements;
 - non-atomic sequential execution semantics.
 
-The tool never returns the confirmation secret, ADC JSON, OAuth secrets, or
-access tokens.
+The tool never returns the confirmation secret, ADC JSON, OAuth secrets, access
+tokens, or confirmation tokens.
+
+`analytics_confirmation_diagnostics` performs a synthetic issue/verify round
+trip entirely inside the current process. It does not return the generated
+confirmation, register replay state, call Google APIs, run a production
+preflight, or mutate resources. Use its `confirmation_key_id` and
+`process_instance_id` values to detect inconsistent replicas or revisions.
+
+The diagnostics distinguish:
+
+- `CONFIRMATION_KEY_MISMATCH`: the receipt declares a key ID that is neither the
+  configured current key nor the valid previous rotation key;
+- `INVALID_CONFIRMATION`: the signature is invalid for the key ID declared by
+  the receipt, indicating corruption or alteration;
+- `CONFIRMATION_EXPIRED`: the receipt TTL elapsed;
+- `CONFIRMATION_REPLAYED`: the receipt was already registered in the current
+  process.
 
 ## Validation model
 
@@ -94,17 +113,26 @@ Confirmations use:
 EXECUTE <32-character-operation-hash>.<signed-payload>.<signature>
 ```
 
-Receipts are cross-instance verifiable while the secret remains identical, but
-replay blocking is process-local best effort:
+Version-2 confirmations include a non-secret `kid` key identifier and `iid`
+issuing-process identifier in the signed payload. The verifier accepts the
+current key or an explicitly configured valid previous key during controlled
+rotation. Version-1 receipts remain compatible while unexpired.
+
+Cross-instance validity is not asserted unconditionally. It requires matching
+confirmation key IDs across the issuing and verifying instances:
 
 ```json
 {
+  "cross_instance_valid": null,
+  "cross_instance_requirement": "MATCHING_CONFIRMATION_KEY_ID",
   "replay_protection": "BEST_EFFORT_PROCESS_LOCAL",
   "globally_single_use": false
 }
 ```
 
-Receipts issued before a redeploy or safety-model change must be revalidated.
+Receipts issued before a redeploy, key change, or safety-model change must be
+revalidated unless the old key is deliberately configured as the previous key
+for a bounded rotation window.
 
 ## Non-atomic batches
 
@@ -193,6 +221,8 @@ GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS=8448275903
 GOOGLE_ANALYTICS_MAX_OPERATIONS_PER_REQUEST=10
 GOOGLE_ANALYTICS_CONFIRMATION_TTL_SECONDS=900
 GOOGLE_ANALYTICS_CONFIRMATION_SECRET=<random secret of at least 32 bytes>
+# Optional only during controlled key rotation:
+GOOGLE_ANALYTICS_CONFIRMATION_PREVIOUS_SECRET=<previous secret>
 ```
 
 To enable a mutation, the global gate, the action gate, and the applicable
@@ -209,8 +239,20 @@ A `GoogleAdsLink` create, update, or delete also requires its customer ID in
 `GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS`. Existing links outside the
 allowlist remain readable but cannot be mutated.
 
-The confirmation secret must be configured directly in the deployment
-platform. Do not reuse the Google Ads confirmation secret.
+The current confirmation secret must be configured directly in the deployment
+platform and must be identical across every active replica and revision. Do not
+reuse the Google Ads confirmation secret.
+
+For controlled rotation:
+
+1. deploy the new value as `GOOGLE_ANALYTICS_CONFIRMATION_SECRET` everywhere;
+2. temporarily configure the old value as
+   `GOOGLE_ANALYTICS_CONFIRMATION_PREVIOUS_SECRET` everywhere;
+3. verify matching key IDs with `analytics_confirmation_diagnostics`;
+4. wait for all receipts issued under the old key to expire;
+5. remove `GOOGLE_ANALYTICS_CONFIRMATION_PREVIOUS_SECRET`.
+
+Do not leave a previous secret configured indefinitely.
 
 ## OAuth scope
 

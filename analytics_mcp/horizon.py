@@ -23,6 +23,9 @@ from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
+from analytics_mcp.tools.admin.confirmation_keys import (
+    analytics_confirmation_diagnostics,
+)
 from analytics_mcp.tools.admin.crud_hardened import (
     analytics_archive_resource,
     analytics_batch_operations,
@@ -75,6 +78,7 @@ _READ_TOOLS: tuple[tuple[ToolFunction, str | None], ...] = (
     (run_funnel_report, _run_funnel_report_description()),
     (run_conversions_report, _run_conversions_report_description()),
     (analytics_safety_status, None),
+    (analytics_confirmation_diagnostics, None),
     (analytics_list_mutable_resources, None),
     (analytics_get_mutation_schema, None),
     (analytics_get_resource, None),
