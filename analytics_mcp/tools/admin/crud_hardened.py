@@ -11,14 +11,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Sequence
 
 from google.analytics import admin_v1beta
 from google.api_core import exceptions as google_exceptions
 
-from analytics_mcp.tools.admin import crud_registry as _registry
 from analytics_mcp.tools.admin.crud_safety import (
     CrudSafetyError,
     analytics_safety_status,
@@ -35,20 +33,6 @@ from analytics_mcp.tools.admin.crud_safety import (
 from analytics_mcp.tools.client import create_admin_api_client
 from analytics_mcp.tools.utils import construct_property_rn, proto_to_dict
 
-
-def _harden_resource_registry() -> None:
-    """Adds dedicated gates without changing the upstream registry layout."""
-    hardened = []
-    for spec in _registry._RESOURCE_SPECS:
-        if spec.name == "CustomDimension":
-            spec = replace(spec, risk_gate="custom_dimension")
-        elif spec.name == "CustomMetric":
-            spec = replace(spec, risk_gate="custom_metric")
-        hardened.append(spec)
-    _registry._RESOURCE_SPECS = tuple(hardened)
-
-
-_harden_resource_registry()
 
 from analytics_mcp.tools.admin import crud as _crud  # noqa: E402
 from analytics_mcp.tools.admin.crud_registry import (
