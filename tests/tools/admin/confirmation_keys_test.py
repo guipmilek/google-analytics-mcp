@@ -31,13 +31,17 @@ class ConfirmationKeysTest(unittest.TestCase):
         }
 
     def test_package_initialization_installs_hardened_helpers(self):
-        self.assertIs(crud_safety.issue_confirmation, confirmation_keys.issue_confirmation)
+        self.assertIs(
+            crud_safety.issue_confirmation, confirmation_keys.issue_confirmation
+        )
         self.assertIs(
             crud_safety.verify_and_register_confirmation,
             confirmation_keys.verify_and_register_confirmation,
         )
 
-    def test_receipt_declares_key_and_instance_without_asserting_cross_instance(self):
+    def test_receipt_declares_key_and_instance_without_asserting_cross_instance(
+        self,
+    ):
         with patch.dict(os.environ, self._environment(), clear=True):
             receipt = crud_safety.issue_confirmation(
                 self._payload(), "546475155", 900
