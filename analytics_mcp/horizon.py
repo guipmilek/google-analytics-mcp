@@ -92,27 +92,37 @@ _MUTATION_TOOLS: tuple[tuple[ToolFunction, str | None], ...] = (
 
 
 def configure_deployment_credentials() -> Path | None:
-    """Materializes Google ADC from the shared MCP_CREDENTIALS envelope.
+    """Materializes Google ADC for Horizon.
 
-    Workload identity or an already configured GOOGLE_APPLICATION_CREDENTIALS
-    path remains supported when the envelope or its credential field is absent.
+    ``MCP_CREDENTIALS`` accepts either the shared credential envelope or a raw
+    Google credential object. Existing deployments that still use
+    ``GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64`` remain functional while
+    they are migrated.
     """
     encoded = os.getenv("MCP_CREDENTIALS", "").strip()
+    source_name = "MCP_CREDENTIALS"
+    if not encoded:
+        encoded = os.getenv(
+            "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64", ""
+        ).strip()
+        source_name = "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64"
     if not encoded:
         return None
 
     try:
-        envelope = json.loads(
+        payload = json.loads(
             base64.b64decode(encoded, validate=True).decode("utf-8")
         )
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(
-            "MCP_CREDENTIALS must be a base64-encoded JSON object."
+            f"{source_name} must be a base64-encoded JSON object."
         ) from exc
 
-    if not isinstance(envelope, dict):
-        raise RuntimeError("MCP_CREDENTIALS must decode to a JSON object.")
-    credentials = envelope.get("google_credentials")
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{source_name} must decode to a JSON object.")
+    credentials = payload.get("google_credentials")
+    if credentials is None and isinstance(payload.get("type"), str):
+        credentials = payload
     if credentials is None:
         return None
     if not isinstance(credentials, dict):

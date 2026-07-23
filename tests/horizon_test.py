@@ -51,6 +51,30 @@ class HorizonServerTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 configure_deployment_credentials()
 
+    def test_legacy_raw_credentials_are_materialized(self):
+        credentials = {
+            "type": "service_account",
+            "project_id": "polisteel-marketing-2026",
+        }
+        encoded = base64.b64encode(
+            json.dumps(credentials).encode("utf-8")
+        ).decode("ascii")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "adc.json"
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64": encoded
+                    },
+                    clear=True,
+                ),
+                patch("analytics_mcp.horizon._ADC_PATH", path),
+            ):
+                configured = configure_deployment_credentials()
+                self.assertEqual(path, configured)
+                self.assertEqual(credentials, json.loads(path.read_text()))
+
     def test_server_exposes_all_existing_tools(self):
         with patch.dict(os.environ, {}, clear=True):
             server = create_horizon_server()
