@@ -23,9 +23,6 @@ from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
-from analytics_mcp.tools.admin.confirmation_keys import (
-    analytics_confirmation_diagnostics,
-)
 from analytics_mcp.tools.admin.crud_hardened import (
     analytics_archive_resource,
     analytics_batch_operations,
@@ -35,7 +32,7 @@ from analytics_mcp.tools.admin.crud_hardened import (
     analytics_get_resource,
     analytics_list_mutable_resources,
     analytics_list_resources,
-    analytics_safety_status,
+    analytics_crud_status,
     analytics_update_resource,
 )
 from analytics_mcp.tools.admin.crud_safety import CrudSafetyError
@@ -77,8 +74,7 @@ _READ_TOOLS: tuple[tuple[ToolFunction, str | None], ...] = (
     (run_realtime_report, _run_realtime_report_description()),
     (run_funnel_report, _run_funnel_report_description()),
     (run_conversions_report, _run_conversions_report_description()),
-    (analytics_safety_status, None),
-    (analytics_confirmation_diagnostics, None),
+    (analytics_crud_status, None),
     (analytics_list_mutable_resources, None),
     (analytics_get_mutation_schema, None),
     (analytics_get_resource, None),
@@ -195,6 +191,8 @@ def _add_tool(
     function: ToolFunction,
     *,
     read_only: bool,
+    destructive: bool,
+    idempotent: bool,
     description: str | None,
 ) -> None:
     wrapped = _with_structured_errors(function)
@@ -203,7 +201,13 @@ def _add_tool(
     server.add_tool(
         Tool.from_function(
             wrapped,
-            annotations=ToolAnnotations(readOnlyHint=read_only),
+            annotations=ToolAnnotations(
+                title=function.__name__.replace("_", " ").title(),
+                readOnlyHint=read_only,
+                destructiveHint=destructive,
+                idempotentHint=idempotent,
+                openWorldHint=True,
+            ),
         )
     )
 
@@ -221,13 +225,27 @@ def create_horizon_server() -> FastMCP:
             server,
             function,
             read_only=True,
+            destructive=False,
+            idempotent=True,
             description=description,
         )
     for function, description in _MUTATION_TOOLS:
+        destructive = function in {
+            analytics_update_resource,
+            analytics_archive_resource,
+            analytics_delete_resource,
+            analytics_batch_operations,
+        }
+        idempotent = function in {
+            analytics_update_resource,
+            analytics_delete_resource,
+        }
         _add_tool(
             server,
             function,
             read_only=False,
+            destructive=destructive,
+            idempotent=idempotent,
             description=description,
         )
     return server

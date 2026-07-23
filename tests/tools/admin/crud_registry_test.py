@@ -28,7 +28,8 @@ class CrudRegistryTest(unittest.TestCase):
 
     def test_schema_exposes_validation_limitations(self):
         schema = get_resource_spec("CustomDimension").schema()
-        self.assertIn("connector preflight", schema["validation_note"])
+        self.assertIn("dry_run", schema["validation_note"])
+        self.assertIn("connector validation", schema["validation_note"])
         self.assertIn("non-atomic", schema["execution_note"])
 
     def test_data_stream_accepts_type_alias(self):

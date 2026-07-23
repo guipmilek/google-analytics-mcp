@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""Registry for protected Google Analytics Admin API CRUD resources."""
+"""Registry for direct Google Analytics Admin API CRUD resources."""
 
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, Mapping, Tuple
@@ -14,7 +14,7 @@ from typing import Dict, Iterable, Mapping, Tuple
 
 @dataclass(frozen=True)
 class FieldSpec:
-    """Describes a field accepted by the protected CRUD layer."""
+    """Describes a field accepted by the direct CRUD layer."""
 
     name: str
     field_type: str
@@ -41,7 +41,6 @@ class ResourceSpec:
     request_classes: Mapping[str, str]
     request_resource_field: str
     fields: Tuple[FieldSpec, ...]
-    risk_gate: str | None = None
     singleton_suffix: str | None = None
     aliases: Mapping[str, str] = field(default_factory=dict)
 
@@ -53,12 +52,12 @@ class ResourceSpec:
             "message_class": self.message_class,
             "parent_kind": self.parent_kind,
             "actions": list(self.actions),
-            "risk_gate": self.risk_gate,
             "aliases": dict(self.aliases),
             "fields": [asdict(item) for item in self.fields],
             "validation_note": (
-                "VALIDATE_ONLY is a connector preflight. The Analytics Admin "
-                "API does not provide a generic validate_only mutation mode."
+                "dry_run performs connector validation and precondition reads. "
+                "The Analytics Admin API does not provide a generic native "
+                "validate-only mutation mode."
             ),
             "execution_note": (
                 "Batch execution is sequential and non-atomic. It stops after "
@@ -95,7 +94,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "archive": "ArchiveCustomDimensionRequest",
         },
         request_resource_field="custom_dimension",
-        risk_gate="custom_dimension",
         fields=(
             FieldSpec(
                 "name",
@@ -146,7 +144,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "archive": "ArchiveCustomMetricRequest",
         },
         request_resource_field="custom_metric",
-        risk_gate="custom_metric",
         fields=(
             FieldSpec(
                 "name",
@@ -204,7 +201,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "delete": "DeleteKeyEventRequest",
         },
         request_resource_field="key_event",
-        risk_gate="key_event",
         fields=(
             FieldSpec(
                 "name",
@@ -246,7 +242,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "delete": "DeleteDataStreamRequest",
         },
         request_resource_field="data_stream",
-        risk_gate="data_stream",
         aliases={"type": "type_"},
         fields=(
             FieldSpec(
@@ -311,7 +306,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "delete": "DeleteMeasurementProtocolSecretRequest",
         },
         request_resource_field="measurement_protocol_secret",
-        risk_gate="measurement_protocol_secret",
         fields=(
             FieldSpec(
                 "name",
@@ -350,7 +344,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "delete": "DeleteGoogleAdsLinkRequest",
         },
         request_resource_field="google_ads_link",
-        risk_gate="link",
         fields=(
             FieldSpec(
                 "name",
@@ -367,8 +360,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
                 immutable=True,
             ),
             FieldSpec("ads_personalization_enabled", "bool"),
-            FieldSpec("campaign_data_sharing_enabled", "bool"),
-            FieldSpec("cost_data_sharing_enabled", "bool"),
         ),
     ),
     ResourceSpec(
@@ -388,7 +379,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "update": "UpdateDataRetentionSettingsRequest",
         },
         request_resource_field="data_retention_settings",
-        risk_gate="retention",
         fields=(
             FieldSpec(
                 "name",
@@ -418,7 +408,6 @@ _RESOURCE_SPECS: Tuple[ResourceSpec, ...] = (
             "update": "UpdateAttributionSettingsRequest",
         },
         request_resource_field="attribution_settings",
-        risk_gate="attribution",
         fields=(
             FieldSpec(
                 "name",
@@ -444,7 +433,7 @@ def list_resource_specs() -> Iterable[ResourceSpec]:
 
 
 def get_resource_spec(resource: str) -> ResourceSpec:
-    """Returns a resource spec or raises a clear error."""
+    """Return a direct CRUD resource spec or raise a clear error."""
     try:
         return _REGISTRY[resource]
     except KeyError as exc:

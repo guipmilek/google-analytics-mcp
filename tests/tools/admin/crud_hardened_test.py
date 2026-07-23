@@ -1,8 +1,10 @@
 # Copyright 2026 Google LLC
 
+import asyncio
+import inspect
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from google.analytics import admin_v1beta
 from google.api_core import exceptions as google_exceptions
@@ -15,11 +17,9 @@ class CrudHardenedTest(unittest.TestCase):
 
     def _environment(self):
         return {
-            "GOOGLE_ANALYTICS_ADMIN_MUTATIONS_ENABLED": "true",
+            "GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS": "401804063",
             "GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS": "546475155",
             "GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS": "15297504355",
-            "GOOGLE_ANALYTICS_ALLOW_DATA_STREAM_CHANGES": "true",
-            "GOOGLE_ANALYTICS_CONFIRMATION_SECRET": "x" * 48,
         }
 
     def test_data_stream_mutation_honors_stream_allowlist(self):
@@ -110,6 +110,74 @@ class CrudHardenedTest(unittest.TestCase):
         self.assertFalse(
             summarized["verification"]["all_requested_resources_verified"]
         )
+
+    def test_public_writes_have_direct_dry_run_contract(self):
+        for function in (
+            crud_hardened.analytics_create_resource,
+            crud_hardened.analytics_update_resource,
+            crud_hardened.analytics_archive_resource,
+            crud_hardened.analytics_delete_resource,
+            crud_hardened.analytics_batch_operations,
+        ):
+            parameters = inspect.signature(function).parameters
+            self.assertIn("dry_run", parameters)
+            self.assertNotIn("validate_only", parameters)
+            self.assertNotIn("confirmation", parameters)
+
+    def test_dry_run_performs_no_mutation(self):
+        normalized = [
+            {
+                "action": "delete",
+                "resource": "KeyEvent",
+                "resource_name": "properties/546475155/keyEvents/1",
+                "no_op_reason": None,
+                "precondition_hash": "a" * 64,
+            }
+        ]
+        with (
+            patch.dict(os.environ, self._environment(), clear=True),
+            patch.object(
+                crud_hardened,
+                "_account_context_sync",
+                return_value={
+                    "account_id": "401804063",
+                    "property_parent": "accounts/401804063",
+                    "property_parent_precondition_hash": "b" * 64,
+                },
+            ),
+            patch.object(
+                crud_hardened._crud,
+                "_normalize_batch_sync",
+                return_value=normalized,
+            ),
+            patch.object(
+                crud_hardened,
+                "_validate_google_ads_link_operations_sync",
+                return_value=normalized,
+            ),
+            patch.object(
+                crud_hardened,
+                "_safe_execute_one_sync",
+            ) as execute,
+        ):
+            result = asyncio.run(
+                crud_hardened.analytics_batch_operations(
+                    "546475155",
+                    [
+                        {
+                            "action": "delete",
+                            "resource": "KeyEvent",
+                            "resource_name": (
+                                "properties/546475155/keyEvents/1"
+                            ),
+                        }
+                    ],
+                    dry_run=True,
+                )
+            )
+        self.assertEqual("NOT_EXECUTED", result["execution_status"])
+        self.assertFalse(result["verification"]["admin_api_mutation_sent"])
+        execute.assert_not_called()
 
 
 if __name__ == "__main__":

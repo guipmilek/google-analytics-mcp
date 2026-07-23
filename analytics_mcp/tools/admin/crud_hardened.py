@@ -2,42 +2,34 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
 
-"""Hardened public facade for the Analytics Admin CRUD engine."""
+"""Direct public facade for the Analytics Admin CRUD engine."""
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Sequence
 
 from google.analytics import admin_v1beta
 from google.api_core import exceptions as google_exceptions
 
+from analytics_mcp.tools.admin import crud as _crud
+from analytics_mcp.tools.admin.crud_registry import get_resource_spec
 from analytics_mcp.tools.admin.crud_safety import (
+    CRUD_CONTRACT_VERSION,
     CrudSafetyError,
-    analytics_safety_status,
-    issue_confirmation,
+    analytics_crud_status,
     load_safety_config,
+    operation_hash,
     snapshot_hash,
     validate_account_scope,
     validate_google_ads_customer_scope,
     validate_operation_count,
     validate_property_scope,
     validate_stream_scope,
-    verify_and_register_confirmation,
 )
 from analytics_mcp.tools.client import create_admin_api_client
 from analytics_mcp.tools.utils import construct_property_rn, proto_to_dict
-
-
-from analytics_mcp.tools.admin import crud as _crud  # noqa: E402
-from analytics_mcp.tools.admin.crud_registry import (
-    get_resource_spec,
-)  # noqa: E402
 
 analytics_get_mutation_schema = _crud.analytics_get_mutation_schema
 analytics_get_resource = _crud.analytics_get_resource
@@ -46,7 +38,8 @@ analytics_list_resources = _crud.analytics_list_resources
 
 
 def _safe_execute_one_sync(operation: Mapping[str, Any]) -> Dict[str, Any]:
-    """Executes one mutation without conflating post-read failure with dispatch."""
+    """Execute one mutation and report post-read failures separately."""
+
     spec = get_resource_spec(str(operation["resource"]))
     action = str(operation["action"])
     request = _crud._build_request(
@@ -109,6 +102,7 @@ def _safe_execute_one_sync(operation: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Keep the shared engine's executor aligned with the Horizon facade.
 _crud._execute_one_sync = _safe_execute_one_sync
 
 
@@ -116,7 +110,8 @@ def _validate_data_stream_mutation_scope(
     property_id: int | str,
     operations: List[Dict[str, Any]],
 ) -> None:
-    """Applies the stream allowlist to existing DataStream mutations."""
+    """Apply the optional stream allowlist to existing DataStream mutations."""
+
     _, property_num = _crud._property_parts(property_id)
     config = load_safety_config()
     for operation in operations:
@@ -142,7 +137,8 @@ def _read_property_sync(property_id: str) -> Dict[str, Any]:
 
 
 def _account_context_sync(property_id: str, config) -> Dict[str, str]:
-    """Reads and validates the parent Analytics account for the property."""
+    """Read and validate the parent Analytics account for the property."""
+
     property_data = _read_property_sync(property_id)
     parent = str(property_data.get("parent", ""))
     if not parent.startswith("accounts/"):
@@ -174,7 +170,8 @@ def _validate_google_ads_link_operations_sync(
     operations: Sequence[Mapping[str, Any]],
     config,
 ) -> List[Dict[str, Any]]:
-    """Binds Google Ads link operations to an authorized customer ID."""
+    """Bind Google Ads link operations to an authorized customer ID."""
+
     normalized: List[Dict[str, Any]] = []
     link_spec = get_resource_spec("GoogleAdsLink")
     for item in operations:
@@ -193,6 +190,9 @@ def _validate_google_ads_link_operations_sync(
                     "RESOURCE_NAME_REQUIRED",
                     "resource_name is required for GoogleAdsLink mutations.",
                 )
+            if operation.get("no_op_reason") == "ALREADY_ABSENT":
+                normalized.append(operation)
+                continue
             current = _crud._get_sync(link_spec, resource_name)
             customer_id = str(current.get("customer_id", ""))
 
@@ -202,12 +202,13 @@ def _validate_google_ads_link_operations_sync(
     return normalized
 
 
-def _signed_payload(
+def _operation_payload(
     property_num: str,
     account_context: Mapping[str, str],
     normalized: Sequence[Mapping[str, Any]],
 ) -> Dict[str, Any]:
     return {
+        "contract_version": CRUD_CONTRACT_VERSION,
         "property_id": property_num,
         "account_id": account_context["account_id"],
         "property_parent_precondition_hash": account_context[
@@ -221,57 +222,6 @@ def _signed_payload(
 
 def _operation_scope(operations: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     return _crud._operation_scope(operations)
-
-
-def _iso_time(epoch: int) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
-
-
-def _validation_response(
-    property_num: str,
-    account_context: Mapping[str, str],
-    normalized: List[Dict[str, Any]],
-    config,
-) -> Dict[str, Any]:
-    signed_payload = _signed_payload(property_num, account_context, normalized)
-    receipt = issue_confirmation(
-        signed_payload,
-        property_num,
-        config.confirmation_ttl_seconds,
-    )
-    expires_epoch = receipt.pop("confirmation_expires_at_epoch")
-    response = {
-        "account_id": account_context["account_id"],
-        "property_id": property_num,
-        "mode": "VALIDATE_ONLY",
-        "validation_kind": "CONNECTOR_PREFLIGHT",
-        "admin_api_validate_only_supported": False,
-        "validation_status": "PASSED",
-        "validated": True,
-        "validated_in_current_call": True,
-        "execution_attempted": False,
-        "executed": False,
-        "execution_status": "NOT_EXECUTED",
-        "operation_count": len(normalized),
-        "normalized_operations": normalized,
-        "operation_scope": _operation_scope(normalized),
-        "confirmation_expires_at": _iso_time(expires_epoch),
-        "verification": {
-            "sdk_request_objects_built": True,
-            "precondition_reads_performed": True,
-            "property_parent_account_verified": True,
-            "google_ads_customer_allowlist_verified": any(
-                item.get("resource") == "GoogleAdsLink" for item in normalized
-            ),
-            "admin_api_mutation_sent": False,
-            "post_mutation_read_performed": False,
-        },
-    }
-    response.update(receipt)
-    receipt_data = response.get("validation_receipt", {})
-    receipt_data["expires_at"] = response["confirmation_expires_at"]
-    receipt_data.pop("expires_at_epoch", None)
-    return response
 
 
 def _known_rejection(exc: Exception) -> bool:
@@ -290,7 +240,8 @@ def _known_rejection(exc: Exception) -> bool:
 
 
 def _add_verification_summary(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Reports post-read warnings without changing mutation dispatch facts."""
+    """Report post-read warnings without changing mutation dispatch facts."""
+
     if result.get("mode") != "EXECUTE":
         return result
     if result.get("execution_status") != "SUCCEEDED":
@@ -305,7 +256,9 @@ def _add_verification_summary(result: Dict[str, Any]) -> Dict[str, Any]:
         "SUCCEEDED" if not failures else "SUCCEEDED_WITH_VERIFICATION_WARNINGS"
     )
     result["verification"] = {
-        "post_execution_reads_performed": True,
+        "post_execution_reads_performed": result.get(
+            "execution_attempted", False
+        ),
         "all_requested_resources_verified": not failures,
         "verification_failure_count": len(failures),
         "claims_limited_to_requested_resources": True,
@@ -316,10 +269,10 @@ def _add_verification_summary(result: Dict[str, Any]) -> Dict[str, Any]:
 async def analytics_batch_operations(
     property_id: int | str,
     operations: List[Dict[str, Any]],
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Validates or executes a hardened, non-atomic Admin API batch."""
+    """Validate and directly execute a non-atomic Admin API batch."""
+
     _validate_data_stream_mutation_scope(property_id, operations)
     _, property_num = _crud._property_parts(property_id)
     config = load_safety_config()
@@ -340,37 +293,55 @@ async def analytics_batch_operations(
         normalized,
         config,
     )
+    payload = _operation_payload(property_num, account_context, normalized)
+    digest = operation_hash(payload)
 
-    if validate_only:
-        return _validation_response(
-            property_num,
-            account_context,
-            normalized,
-            config,
-        )
-
-    if not confirmation:
-        raise CrudSafetyError(
-            "CONFIRMATION_REQUIRED",
-            "A signed confirmation from a prior validation is required.",
-        )
-
-    signed_payload = _signed_payload(property_num, account_context, normalized)
-    confirmation_info = verify_and_register_confirmation(
-        confirmation,
-        signed_payload,
-        property_num,
-    )
+    if dry_run:
+        return {
+            "contract_version": CRUD_CONTRACT_VERSION,
+            "account_id": account_context["account_id"],
+            "property_id": property_num,
+            "mode": "DRY_RUN",
+            "execution_attempted": False,
+            "executed": False,
+            "execution_status": "NOT_EXECUTED",
+            "operation_count": len(normalized),
+            "normalized_operations": normalized,
+            "operation_scope": _operation_scope(normalized),
+            "operation_hash": digest,
+            "verification": {
+                "sdk_request_objects_built": True,
+                "precondition_reads_performed": True,
+                "property_parent_account_verified": True,
+                "admin_api_mutation_sent": False,
+                "post_mutation_read_performed": False,
+            },
+        }
 
     results: List[Dict[str, Any]] = []
-    attempted = 0
+    mutation_attempts = 0
     for index, operation in enumerate(normalized):
-        attempted += 1
+        if operation.get("no_op_reason"):
+            results.append(
+                {
+                    "operation_index": index,
+                    "action": operation["action"],
+                    "resource": operation["resource"],
+                    "resource_name": operation.get("resource_name"),
+                    "execution_status": "SUCCEEDED",
+                    "outcome": operation["no_op_reason"],
+                    "post_execution_verification_status": "VERIFIED",
+                }
+            )
+            continue
+
+        mutation_attempts += 1
         try:
-            result = await asyncio.to_thread(_safe_execute_one_sync, operation)
-            result["operation_index"] = index
-            result["execution_status"] = "SUCCEEDED"
-            results.append(result)
+            item = await asyncio.to_thread(_safe_execute_one_sync, operation)
+            item["operation_index"] = index
+            item["execution_status"] = "SUCCEEDED"
+            item["outcome"] = "MUTATED"
+            results.append(item)
         except Exception as exc:
             rejected = _known_rejection(exc)
             error = {
@@ -384,11 +355,14 @@ async def analytics_batch_operations(
                 "execution_may_have_completed": not rejected,
                 "automatic_retry_safe": False,
             }
+            completed = sum(
+                item.get("execution_status") == "SUCCEEDED" for item in results
+            )
             return {
+                "contract_version": CRUD_CONTRACT_VERSION,
                 "account_id": account_context["account_id"],
                 "property_id": property_num,
                 "mode": "EXECUTE",
-                "validation_status": "PRIOR_VALIDATION_VERIFIED",
                 "execution_attempted": True,
                 "executed": False if not results and rejected else None,
                 "execution_status": (
@@ -399,22 +373,22 @@ async def analytics_batch_operations(
                 "atomic": False,
                 "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
                 "operation_count": len(normalized),
-                "operations_attempted": attempted,
-                "operations_completed": len(results),
-                "operations_not_attempted": len(normalized) - attempted,
+                "operations_attempted": len(results) + 1,
+                "operations_completed": completed,
+                "operations_not_attempted": len(normalized) - len(results) - 1,
                 "results": results,
                 "error": error,
                 "operation_scope": _operation_scope(normalized),
-                **confirmation_info,
+                "operation_hash": digest,
             }
 
     result = {
+        "contract_version": CRUD_CONTRACT_VERSION,
         "account_id": account_context["account_id"],
         "property_id": property_num,
         "mode": "EXECUTE",
-        "validation_status": "PRIOR_VALIDATION_VERIFIED",
-        "execution_attempted": True,
-        "executed": True,
+        "execution_attempted": mutation_attempts > 0,
+        "executed": mutation_attempts > 0,
         "execution_status": "SUCCEEDED",
         "atomic": False,
         "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
@@ -424,11 +398,7 @@ async def analytics_batch_operations(
         "operations_not_attempted": 0,
         "results": results,
         "operation_scope": _operation_scope(normalized),
-        "verification": {
-            "post_execution_reads_performed": True,
-            "claims_limited_to_requested_resources": True,
-        },
-        **confirmation_info,
+        "operation_hash": digest,
     }
     return _add_verification_summary(result)
 
@@ -438,10 +408,10 @@ async def analytics_create_resource(
     resource: str,
     data: Dict[str, Any],
     parent: str | None = None,
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Creates one resource through the hardened CRUD facade."""
+    """Create one Analytics Admin resource directly."""
+
     return await analytics_batch_operations(
         property_id,
         [
@@ -452,8 +422,7 @@ async def analytics_create_resource(
                 "data": data,
             }
         ],
-        validate_only,
-        confirmation,
+        dry_run,
     )
 
 
@@ -463,10 +432,10 @@ async def analytics_update_resource(
     resource_name: str,
     data: Dict[str, Any],
     update_mask: List[str],
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Updates one resource through the hardened CRUD facade."""
+    """Update one Analytics Admin resource directly."""
+
     return await analytics_batch_operations(
         property_id,
         [
@@ -478,8 +447,7 @@ async def analytics_update_resource(
                 "update_mask": update_mask,
             }
         ],
-        validate_only,
-        confirmation,
+        dry_run,
     )
 
 
@@ -487,10 +455,10 @@ async def analytics_archive_resource(
     property_id: int | str,
     resource: str,
     resource_name: str,
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Archives one resource through the hardened CRUD facade."""
+    """Archive one Analytics Admin resource directly."""
+
     return await analytics_batch_operations(
         property_id,
         [
@@ -500,8 +468,7 @@ async def analytics_archive_resource(
                 "resource_name": resource_name,
             }
         ],
-        validate_only,
-        confirmation,
+        dry_run,
     )
 
 
@@ -509,10 +476,10 @@ async def analytics_delete_resource(
     property_id: int | str,
     resource: str,
     resource_name: str,
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Deletes one resource through the hardened CRUD facade."""
+    """Delete one resource directly; an absent resource is a successful no-op."""
+
     return await analytics_batch_operations(
         property_id,
         [
@@ -522,6 +489,5 @@ async def analytics_delete_resource(
                 "resource_name": resource_name,
             }
         ],
-        validate_only,
-        confirmation,
+        dry_run,
     )

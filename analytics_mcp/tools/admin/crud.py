@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Sequence
 
 from google.analytics import admin_v1alpha, admin_v1beta
@@ -26,14 +25,11 @@ from analytics_mcp.tools.admin.crud_registry import (
 )
 from analytics_mcp.tools.admin.crud_safety import (
     CrudSafetyError,
-    enforce_action_gates,
-    issue_confirmation,
     load_safety_config,
     snapshot_hash,
     validate_operation_count,
     validate_property_scope,
     validate_stream_scope,
-    verify_and_register_confirmation,
 )
 from analytics_mcp.tools.client import (
     create_admin_alpha_api_client,
@@ -359,7 +355,16 @@ def _snapshot_sync(
         raise CrudSafetyError(
             "RESOURCE_NAME_REQUIRED", "resource_name is required."
         )
-    return {"kind": "resource", "value": _get_sync(spec, resource_name)}
+    try:
+        return {"kind": "resource", "value": _get_sync(spec, resource_name)}
+    except google_exceptions.NotFound:
+        if action in {"archive", "delete"}:
+            return {"kind": "missing", "value": None}
+        raise
+    except CrudSafetyError as exc:
+        if action in {"archive", "delete"} and exc.code == "RESOURCE_NOT_FOUND":
+            return {"kind": "missing", "value": None}
+        raise
 
 
 def _normalize_operation_sync(
@@ -376,14 +381,6 @@ def _normalize_operation_sync(
             f"Action '{action}' is not supported for {resource}.",
             {"supported_actions": list(spec.actions)},
         )
-    enforce_action_gates(
-        spec.name,
-        action,
-        spec.api_channel,
-        spec.risk_gate,
-        config,
-    )
-
     property_name, property_num = _property_parts(property_id)
     validate_property_scope(property_num, operation, config)
     resource_name = operation.get("resource_name")
@@ -444,6 +441,9 @@ def _normalize_operation_sync(
         "data": data,
         "update_mask": update_mask,
         "precondition_hash": snapshot_hash(snapshot),
+        "no_op_reason": (
+            "ALREADY_ABSENT" if snapshot.get("kind") == "missing" else None
+        ),
     }
 
 
@@ -475,56 +475,6 @@ def _operation_scope(operations: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         "atomic": False,
         "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
     }
-
-
-def _iso_time(epoch: int) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
-
-
-def _validation_response(
-    property_num: str,
-    normalized: List[Dict[str, Any]],
-    config,
-) -> Dict[str, Any]:
-    signed_payload = {
-        "property_id": property_num,
-        "operations": normalized,
-        "atomic": False,
-        "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
-    }
-    receipt = issue_confirmation(
-        signed_payload,
-        property_num,
-        config.confirmation_ttl_seconds,
-    )
-    expires_epoch = receipt.pop("confirmation_expires_at_epoch")
-    response = {
-        "property_id": property_num,
-        "mode": "VALIDATE_ONLY",
-        "validation_kind": "CONNECTOR_PREFLIGHT",
-        "admin_api_validate_only_supported": False,
-        "validation_status": "PASSED",
-        "validated": True,
-        "validated_in_current_call": True,
-        "execution_attempted": False,
-        "executed": False,
-        "execution_status": "NOT_EXECUTED",
-        "operation_count": len(normalized),
-        "normalized_operations": normalized,
-        "operation_scope": _operation_scope(normalized),
-        "confirmation_expires_at": _iso_time(expires_epoch),
-        "verification": {
-            "sdk_request_objects_built": True,
-            "precondition_reads_performed": True,
-            "admin_api_mutation_sent": False,
-            "post_mutation_read_performed": False,
-        },
-    }
-    response.update(receipt)
-    receipt_data = response.get("validation_receipt", {})
-    receipt_data["expires_at"] = response["confirmation_expires_at"]
-    receipt_data.pop("expires_at_epoch", None)
-    return response
 
 
 def _known_rejection(exc: Exception) -> bool:
@@ -582,20 +532,19 @@ def _execute_one_sync(operation: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 async def analytics_list_mutable_resources() -> List[Dict[str, Any]]:
-    """Lists Admin API resources supported by the protected CRUD layer."""
+    """Lists Admin API resources supported by direct CRUD."""
     return [
         {
             "resource": spec.name,
             "api_channel": spec.api_channel,
             "actions": list(spec.actions),
-            "risk_gate": spec.risk_gate,
         }
         for spec in list_resource_specs()
     ]
 
 
 async def analytics_get_mutation_schema(resource: str) -> Dict[str, Any]:
-    """Returns the protected mutation schema for one resource type."""
+    """Return the direct mutation schema for one resource type."""
     return get_resource_spec(resource).schema()
 
 
@@ -643,110 +592,19 @@ async def analytics_list_resources(
     return await asyncio.to_thread(_list_sync, spec, resolved_parent)
 
 
+# Public compatibility wrappers. The Horizon and ADK runtimes import the
+# facade directly; callers that historically imported this engine module also
+# receive the same one-call direct CRUD contract.
 async def analytics_batch_operations(
     property_id: int | str,
     operations: List[Dict[str, Any]],
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Validates or executes a protected non-atomic Admin API batch."""
-    property_name, property_num = _property_parts(property_id)
-    del property_name
-    config = load_safety_config()
-    materialized = validate_operation_count(operations, config)
-    validate_property_scope(property_num, materialized, config)
+    from analytics_mcp.tools.admin import crud_hardened
 
-    normalized = await asyncio.to_thread(
-        _normalize_batch_sync,
-        property_num,
-        materialized,
-        config,
+    return await crud_hardened.analytics_batch_operations(
+        property_id, operations, dry_run
     )
-
-    if validate_only:
-        return _validation_response(property_num, normalized, config)
-
-    if not confirmation:
-        raise CrudSafetyError(
-            "CONFIRMATION_REQUIRED",
-            "A signed confirmation from a prior validation is required.",
-        )
-    signed_payload = {
-        "property_id": property_num,
-        "operations": normalized,
-        "atomic": False,
-        "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
-    }
-    confirmation_info = verify_and_register_confirmation(
-        confirmation, signed_payload, property_num
-    )
-
-    results: List[Dict[str, Any]] = []
-    attempted = 0
-    for index, operation in enumerate(normalized):
-        attempted += 1
-        try:
-            result = await asyncio.to_thread(_execute_one_sync, operation)
-            result["operation_index"] = index
-            result["execution_status"] = "SUCCEEDED"
-            results.append(result)
-        except Exception as exc:
-            rejected = _known_rejection(exc)
-            error = {
-                "operation_index": index,
-                "action": operation["action"],
-                "resource": operation["resource"],
-                "resource_name": operation.get("resource_name"),
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "execution_state": "NOT_EXECUTED" if rejected else "UNKNOWN",
-                "execution_may_have_completed": not rejected,
-                "automatic_retry_safe": False,
-            }
-            return {
-                "property_id": property_num,
-                "mode": "EXECUTE",
-                "validation_status": "PRIOR_VALIDATION_VERIFIED",
-                "execution_attempted": True,
-                "executed": False if not results and rejected else None,
-                "execution_status": (
-                    "FAILED"
-                    if not results and rejected
-                    else "PARTIAL_OR_UNKNOWN"
-                ),
-                "atomic": False,
-                "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
-                "operation_count": len(normalized),
-                "operations_attempted": attempted,
-                "operations_completed": len(results),
-                "operations_not_attempted": len(normalized) - attempted,
-                "results": results,
-                "error": error,
-                "operation_scope": _operation_scope(normalized),
-                **confirmation_info,
-            }
-
-    return {
-        "property_id": property_num,
-        "mode": "EXECUTE",
-        "validation_status": "PRIOR_VALIDATION_VERIFIED",
-        "execution_attempted": True,
-        "executed": True,
-        "execution_status": "SUCCEEDED",
-        "atomic": False,
-        "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
-        "operation_count": len(normalized),
-        "operations_attempted": len(normalized),
-        "operations_completed": len(normalized),
-        "operations_not_attempted": 0,
-        "results": results,
-        "operation_scope": _operation_scope(normalized),
-        "verification": {
-            "post_execution_reads_performed": True,
-            "claims_limited_to_requested_resources": True,
-        },
-        **confirmation_info,
-    }
 
 
 async def analytics_create_resource(
@@ -754,18 +612,12 @@ async def analytics_create_resource(
     resource: str,
     data: Dict[str, Any],
     parent: str | None = None,
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Creates one resource through the protected CRUD engine."""
-    operation = {
-        "action": "create",
-        "resource": resource,
-        "parent": parent,
-        "data": data,
-    }
-    return await analytics_batch_operations(
-        property_id, [operation], validate_only, confirmation
+    from analytics_mcp.tools.admin import crud_hardened
+
+    return await crud_hardened.analytics_create_resource(
+        property_id, resource, data, parent, dry_run
     )
 
 
@@ -775,19 +627,17 @@ async def analytics_update_resource(
     resource_name: str,
     data: Dict[str, Any],
     update_mask: List[str],
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Updates one resource through the protected CRUD engine."""
-    operation = {
-        "action": "update",
-        "resource": resource,
-        "resource_name": resource_name,
-        "data": data,
-        "update_mask": update_mask,
-    }
-    return await analytics_batch_operations(
-        property_id, [operation], validate_only, confirmation
+    from analytics_mcp.tools.admin import crud_hardened
+
+    return await crud_hardened.analytics_update_resource(
+        property_id,
+        resource,
+        resource_name,
+        data,
+        update_mask,
+        dry_run,
     )
 
 
@@ -795,17 +645,12 @@ async def analytics_archive_resource(
     property_id: int | str,
     resource: str,
     resource_name: str,
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Archives one resource through the protected CRUD engine."""
-    operation = {
-        "action": "archive",
-        "resource": resource,
-        "resource_name": resource_name,
-    }
-    return await analytics_batch_operations(
-        property_id, [operation], validate_only, confirmation
+    from analytics_mcp.tools.admin import crud_hardened
+
+    return await crud_hardened.analytics_archive_resource(
+        property_id, resource, resource_name, dry_run
     )
 
 
@@ -813,15 +658,10 @@ async def analytics_delete_resource(
     property_id: int | str,
     resource: str,
     resource_name: str,
-    validate_only: bool = True,
-    confirmation: str | None = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Deletes one resource through the protected CRUD engine."""
-    operation = {
-        "action": "delete",
-        "resource": resource,
-        "resource_name": resource_name,
-    }
-    return await analytics_batch_operations(
-        property_id, [operation], validate_only, confirmation
+    from analytics_mcp.tools.admin import crud_hardened
+
+    return await crud_hardened.analytics_delete_resource(
+        property_id, resource, resource_name, dry_run
     )

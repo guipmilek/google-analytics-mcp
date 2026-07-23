@@ -72,8 +72,7 @@ class HorizonServerTest(unittest.TestCase):
                 "run_realtime_report",
                 "run_funnel_report",
                 "run_conversions_report",
-                "analytics_safety_status",
-                "analytics_confirmation_diagnostics",
+                "analytics_crud_status",
                 "analytics_list_mutable_resources",
                 "analytics_get_mutation_schema",
                 "analytics_get_resource",
@@ -87,12 +86,16 @@ class HorizonServerTest(unittest.TestCase):
             set(components),
         )
         self.assertTrue(
-            components["analytics_safety_status"].annotations.readOnlyHint
+            components["analytics_crud_status"].annotations.readOnlyHint
         )
         self.assertTrue(
-            components[
-                "analytics_confirmation_diagnostics"
-            ].annotations.readOnlyHint
+            components["analytics_delete_resource"].annotations.destructiveHint
+        )
+        self.assertTrue(
+            components["analytics_delete_resource"].annotations.idempotentHint
+        )
+        self.assertTrue(
+            components["analytics_delete_resource"].annotations.openWorldHint
         )
 
     def test_partial_oauth_configuration_is_rejected(self):

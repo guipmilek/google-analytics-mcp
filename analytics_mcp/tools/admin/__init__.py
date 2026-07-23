@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Load confirmation-key hardening before the protected CRUD facade imports its
-# signing and verification helpers.
-from analytics_mcp.tools.admin import confirmation_keys as _confirmation_keys
+"""Google Analytics Admin API tools."""
 
-__all__ = ["_confirmation_keys"]
+__all__: list[str] = []
