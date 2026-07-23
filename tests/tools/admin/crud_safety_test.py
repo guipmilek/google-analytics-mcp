@@ -72,12 +72,13 @@ class CrudSafetyTest(unittest.TestCase):
                 )
             self.assertEqual("DATA_STREAM_NOT_ALLOWED", context.exception.code)
 
-    def test_empty_allowlists_fail_closed(self):
+    def test_missing_config_allows_all_accessible_resources(self):
         with patch.dict(os.environ, {}, clear=True):
             config = crud_safety.load_safety_config()
-            with self.assertRaises(crud_safety.CrudSafetyError) as context:
-                crud_safety.validate_property_scope("546475155", {}, config)
-        self.assertEqual("PROPERTY_ALLOWLIST_EMPTY", context.exception.code)
+            crud_safety.validate_account_scope("401804063", config)
+            crud_safety.validate_property_scope("546475155", {}, config)
+            crud_safety.validate_google_ads_customer_scope("8448275903", config)
+        self.assertEqual(10, config.max_operations)
 
 
 if __name__ == "__main__":

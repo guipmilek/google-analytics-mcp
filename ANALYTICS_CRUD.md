@@ -35,16 +35,18 @@ therefore represents connector-side validation only.
 Use `analytics_get_mutation_schema` for exact fields, aliases, required create
 fields, immutable fields, and update-mask rules.
 
-## Horizon deployment: two keys
+## Horizon deployment: at most two keys
 
 ```env
 MCP_CREDENTIALS=<base64-encoded {"google_credentials":{...}}>
+# Optional restriction:
 MCP_CONFIG={"accounts":["401804063"],"properties":["546475155"],"data_streams":[],"ads_customers":[],"max_operations":10}
 ```
 
-Account and property allowlists are mandatory for writes. Data-stream and Ads
-customer allowlists are enforced when those scoped resources are mutated.
-Cross-property references are rejected.
+`MCP_CONFIG` is optional. Missing or empty allowlists allow every resource
+accessible to the credential; configured non-empty arrays restrict their
+corresponding resource type. The default batch limit is 10. Cross-property
+references are still rejected.
 
 The old `GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64` and variables beginning
 with

@@ -162,6 +162,8 @@ def safety_status_payload(config: SafetyConfig | None = None) -> Dict[str, Any]:
         "runtime": "PYTHON_FASTMCP_HORIZON",
         "write_mode": "DIRECT",
         "deployment_env_keys": ["MCP_CREDENTIALS", "MCP_CONFIG"],
+        "optional_deployment_env_keys": ["MCP_CONFIG"],
+        "empty_allowlist_behavior": "ALLOW_ALL_ACCESSIBLE",
         "dry_run_supported": True,
         "approval_workflow": False,
         "allowlists": {
@@ -230,12 +232,10 @@ def extract_property_ids(value: Any) -> frozenset[str]:
 
 def validate_account_scope(account_id: str, config: SafetyConfig) -> None:
     """Enforces the Analytics account mutation allowlist."""
-    if not config.allowed_account_ids:
-        raise CrudSafetyError(
-            "ACCOUNT_ALLOWLIST_EMPTY",
-            "MCP_CONFIG.accounts is not configured.",
-        )
-    if account_id not in config.allowed_account_ids:
+    if (
+        config.allowed_account_ids
+        and account_id not in config.allowed_account_ids
+    ):
         raise CrudSafetyError(
             "ACCOUNT_NOT_ALLOWED",
             f"Account {account_id} is not in the mutation allowlist.",
@@ -252,12 +252,10 @@ def validate_google_ads_customer_scope(
             "INVALID_GOOGLE_ADS_CUSTOMER_ID",
             "Google Ads customer_id must be numeric.",
         )
-    if not config.allowed_google_ads_customer_ids:
-        raise CrudSafetyError(
-            "GOOGLE_ADS_CUSTOMER_ALLOWLIST_EMPTY",
-            "MCP_CONFIG.ads_customers is not configured.",
-        )
-    if customer_id not in config.allowed_google_ads_customer_ids:
+    if (
+        config.allowed_google_ads_customer_ids
+        and customer_id not in config.allowed_google_ads_customer_ids
+    ):
         raise CrudSafetyError(
             "GOOGLE_ADS_CUSTOMER_NOT_ALLOWED",
             f"Google Ads customer {customer_id} is not in the mutation allowlist.",
@@ -274,12 +272,10 @@ def validate_property_scope(
         raise CrudSafetyError(
             "INVALID_PROPERTY_ID", "property_id must be numeric."
         )
-    if not config.allowed_property_ids:
-        raise CrudSafetyError(
-            "PROPERTY_ALLOWLIST_EMPTY",
-            "MCP_CONFIG.properties is not configured.",
-        )
-    if property_id not in config.allowed_property_ids:
+    if (
+        config.allowed_property_ids
+        and property_id not in config.allowed_property_ids
+    ):
         raise CrudSafetyError(
             "PROPERTY_NOT_ALLOWED",
             f"Property {property_id} is not in the mutation allowlist.",

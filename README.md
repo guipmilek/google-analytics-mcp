@@ -54,10 +54,11 @@ Runtime: Python 3.12
 Contract: direct-crud-v1
 ```
 
-Horizon uses exactly two deployment keys:
+Horizon uses at most two deployment keys:
 
 ```env
 MCP_CREDENTIALS=<base64-encoded credential envelope>
+# Optional restriction:
 MCP_CONFIG={"accounts":["401804063"],"properties":["546475155"],"data_streams":[],"ads_customers":[],"max_operations":10}
 ```
 
@@ -67,9 +68,10 @@ The decoded credential envelope has one field:
 {"google_credentials":{"type":"service_account","project_id":"..."}}
 ```
 
-Empty account or property allowlists fail closed for writes.
-`data_streams` and `ads_customers` may remain empty until those resource types
-are mutated. The old per-setting Horizon variables should be removed.
+`MCP_CONFIG` is optional. Without it, or when its allowlist arrays are absent
+or empty, every Analytics resource accessible to the credential is allowed
+and the default batch limit is 10. Supply it only to narrow scope or override
+the limit. The old per-setting Horizon variables should be removed.
 
 ## ChatGPT workspace setup
 
