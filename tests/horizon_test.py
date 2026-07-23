@@ -11,30 +11,30 @@ from unittest.mock import patch
 from fastmcp import FastMCP
 
 from analytics_mcp.horizon import (
-    configure_adc_from_base64,
+    configure_deployment_credentials,
     create_horizon_server,
 )
 
 
 class HorizonServerTest(unittest.TestCase):
 
-    def test_configure_adc_from_base64(self):
+    def test_configure_deployment_credentials(self):
         credentials = {
             "type": "service_account",
             "project_id": "polisteel-marketing-2026",
         }
         encoded = base64.b64encode(
-            json.dumps(credentials).encode("utf-8")
+            json.dumps({"google_credentials": credentials}).encode("utf-8")
         ).decode("ascii")
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "adc.json"
-            environment = {
-                "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64": encoded,
-                "GOOGLE_ANALYTICS_ADC_PATH": str(path),
-            }
-            with patch.dict(os.environ, environment, clear=True):
-                configured = configure_adc_from_base64()
+            environment = {"MCP_CREDENTIALS": encoded}
+            with (
+                patch.dict(os.environ, environment, clear=True),
+                patch("analytics_mcp.horizon._ADC_PATH", path),
+            ):
+                configured = configure_deployment_credentials()
                 self.assertEqual(path, configured)
                 self.assertEqual(
                     str(path),
@@ -45,11 +45,11 @@ class HorizonServerTest(unittest.TestCase):
     def test_invalid_base64_credentials_are_rejected(self):
         with patch.dict(
             os.environ,
-            {"GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64": "not base64!"},
+            {"MCP_CREDENTIALS": "not base64!"},
             clear=True,
         ):
             with self.assertRaises(RuntimeError):
-                configure_adc_from_base64()
+                configure_deployment_credentials()
 
     def test_server_exposes_all_existing_tools(self):
         with patch.dict(os.environ, {}, clear=True):

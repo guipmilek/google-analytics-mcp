@@ -25,6 +25,7 @@ _HASH_VERSION = 3
 _DEFAULT_MAX_OPERATIONS = 10
 _ABSOLUTE_MAX_OPERATIONS = 100
 CRUD_CONTRACT_VERSION = "direct-crud-v1"
+DEPLOY_CONFIG_ENV = "MCP_CONFIG"
 
 
 class CrudSafetyError(ValueError):
@@ -61,58 +62,91 @@ class SafetyConfig:
     max_operations: int
 
 
-def _env_ids(name: str) -> frozenset[str]:
-    raw = os.getenv(name, "")
-    values = {item.strip() for item in raw.split(",") if item.strip()}
-    invalid = sorted(item for item in values if not item.isdigit())
-    if invalid:
+def _deployment_config() -> Mapping[str, Any]:
+    raw = os.getenv(DEPLOY_CONFIG_ENV, "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
         raise CrudSafetyError(
             "INVALID_ENVIRONMENT_VALUE",
-            f"{name} must contain comma-separated numeric IDs.",
+            f"{DEPLOY_CONFIG_ENV} must be a valid JSON object.",
+        ) from exc
+    if not isinstance(value, dict):
+        raise CrudSafetyError(
+            "INVALID_ENVIRONMENT_VALUE",
+            f"{DEPLOY_CONFIG_ENV} must be a JSON object.",
+        )
+    supported = {
+        "accounts",
+        "properties",
+        "data_streams",
+        "ads_customers",
+        "max_operations",
+    }
+    unknown = sorted(set(value) - supported)
+    if unknown:
+        raise CrudSafetyError(
+            "INVALID_ENVIRONMENT_VALUE",
+            f"{DEPLOY_CONFIG_ENV} contains unsupported keys.",
+            {"unsupported_keys": unknown, "supported_keys": sorted(supported)},
+        )
+    return value
+
+
+def _config_ids(config: Mapping[str, Any], key: str) -> frozenset[str]:
+    raw = config.get(key, [])
+    if not isinstance(raw, list):
+        raise CrudSafetyError(
+            "INVALID_ENVIRONMENT_VALUE",
+            f"{DEPLOY_CONFIG_ENV}.{key} must be an array of numeric IDs.",
+        )
+    values = {str(item).strip() for item in raw}
+    invalid = sorted(item for item in values if not item.isdigit())
+    if invalid or any(isinstance(item, bool) for item in raw):
+        raise CrudSafetyError(
+            "INVALID_ENVIRONMENT_VALUE",
+            f"{DEPLOY_CONFIG_ENV}.{key} must be an array of numeric IDs.",
             {"invalid_values": invalid},
         )
     return frozenset(values)
 
 
-def _env_int(
-    name: str,
+def _config_int(
+    config: Mapping[str, Any],
+    key: str,
     default: int,
     minimum: int,
     maximum: int,
 ) -> int:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        value = int(raw)
-    except ValueError as exc:
+    value = config.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
         raise CrudSafetyError(
             "INVALID_ENVIRONMENT_VALUE",
-            f"{name} must be an integer.",
-            {"environment_variable": name},
-        ) from exc
+            f"{DEPLOY_CONFIG_ENV}.{key} must be an integer.",
+            {"config_key": key},
+        )
     if value < minimum or value > maximum:
         raise CrudSafetyError(
             "INVALID_ENVIRONMENT_VALUE",
-            f"{name} must be between {minimum} and {maximum}.",
-            {"environment_variable": name, "value": value},
+            f"{DEPLOY_CONFIG_ENV}.{key} must be between {minimum} and {maximum}.",
+            {"config_key": key, "value": value},
         )
     return value
 
 
 def load_safety_config() -> SafetyConfig:
     """Loads direct CRUD scope and ignores legacy approval-gate variables."""
+    config = _deployment_config()
     return SafetyConfig(
-        allowed_account_ids=_env_ids("GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS"),
-        allowed_property_ids=_env_ids("GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS"),
-        allowed_data_stream_ids=_env_ids(
-            "GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS"
-        ),
-        allowed_google_ads_customer_ids=_env_ids(
-            "GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS"
-        ),
-        max_operations=_env_int(
-            "GOOGLE_ANALYTICS_MAX_OPERATIONS_PER_REQUEST",
+        allowed_account_ids=_config_ids(config, "accounts"),
+        allowed_property_ids=_config_ids(config, "properties"),
+        allowed_data_stream_ids=_config_ids(config, "data_streams"),
+        allowed_google_ads_customer_ids=_config_ids(config, "ads_customers"),
+        max_operations=_config_int(
+            config,
+            "max_operations",
             _DEFAULT_MAX_OPERATIONS,
             1,
             _ABSOLUTE_MAX_OPERATIONS,
@@ -127,6 +161,7 @@ def safety_status_payload(config: SafetyConfig | None = None) -> Dict[str, Any]:
         "contract_version": CRUD_CONTRACT_VERSION,
         "runtime": "PYTHON_FASTMCP_HORIZON",
         "write_mode": "DIRECT",
+        "deployment_env_keys": ["MCP_CREDENTIALS", "MCP_CONFIG"],
         "dry_run_supported": True,
         "approval_workflow": False,
         "allowlists": {
@@ -198,7 +233,7 @@ def validate_account_scope(account_id: str, config: SafetyConfig) -> None:
     if not config.allowed_account_ids:
         raise CrudSafetyError(
             "ACCOUNT_ALLOWLIST_EMPTY",
-            "GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS is not configured.",
+            "MCP_CONFIG.accounts is not configured.",
         )
     if account_id not in config.allowed_account_ids:
         raise CrudSafetyError(
@@ -220,7 +255,7 @@ def validate_google_ads_customer_scope(
     if not config.allowed_google_ads_customer_ids:
         raise CrudSafetyError(
             "GOOGLE_ADS_CUSTOMER_ALLOWLIST_EMPTY",
-            "GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS is not configured.",
+            "MCP_CONFIG.ads_customers is not configured.",
         )
     if customer_id not in config.allowed_google_ads_customer_ids:
         raise CrudSafetyError(
@@ -242,7 +277,7 @@ def validate_property_scope(
     if not config.allowed_property_ids:
         raise CrudSafetyError(
             "PROPERTY_ALLOWLIST_EMPTY",
-            "GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS is not configured.",
+            "MCP_CONFIG.properties is not configured.",
         )
     if property_id not in config.allowed_property_ids:
         raise CrudSafetyError(

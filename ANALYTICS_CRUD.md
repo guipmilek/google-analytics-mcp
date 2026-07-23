@@ -35,24 +35,23 @@ therefore represents connector-side validation only.
 Use `analytics_get_mutation_schema` for exact fields, aliases, required create
 fields, immutable fields, and update-mask rules.
 
-## Scope configuration
+## Horizon deployment: two keys
 
 ```env
-GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS=
-GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS=
-GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS=
-GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS=
-GOOGLE_ANALYTICS_MAX_OPERATIONS_PER_REQUEST=10
+MCP_CREDENTIALS=<base64-encoded {"google_credentials":{...}}>
+MCP_CONFIG={"accounts":["401804063"],"properties":["546475155"],"data_streams":[],"ads_customers":[],"max_operations":10}
 ```
 
 Account and property allowlists are mandatory for writes. Data-stream and Ads
 customer allowlists are enforced when those scoped resources are mutated.
 Cross-property references are rejected.
 
-Legacy variables beginning with
+The old `GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64` and variables beginning
+with
 `GOOGLE_ANALYTICS_ADMIN_MUTATIONS_ENABLED`,
-`GOOGLE_ANALYTICS_ALLOW_`, or `GOOGLE_ANALYTICS_CONFIRMATION_` are ignored by
-the Horizon direct-CRUD runtime and may be removed from the deployment.
+`GOOGLE_ANALYTICS_ALLOWED_`, `GOOGLE_ANALYTICS_MAX_`,
+`GOOGLE_ANALYTICS_ALLOW_`, or `GOOGLE_ANALYTICS_CONFIRMATION_` are not used by
+the Horizon direct-CRUD runtime and should be removed from the deployment.
 
 ## MCP action annotations
 

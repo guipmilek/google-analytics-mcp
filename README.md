@@ -54,25 +54,22 @@ Runtime: Python 3.12
 Contract: direct-crud-v1
 ```
 
-Required credentials:
+Horizon uses exactly two deployment keys:
 
 ```env
-GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64=<base64-service-account-json>
-GOOGLE_PROJECT_ID=<google-cloud-project-id>
-GOOGLE_CLOUD_PROJECT=<google-cloud-project-id>
+MCP_CREDENTIALS=<base64-encoded credential envelope>
+MCP_CONFIG={"accounts":["401804063"],"properties":["546475155"],"data_streams":[],"ads_customers":[],"max_operations":10}
 ```
 
-Required write scope:
+The decoded credential envelope has one field:
 
-```env
-GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS=<comma-separated-numeric-ids>
-GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS=<comma-separated-numeric-ids>
-GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS=<optional-comma-separated-ids>
-GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS=<optional-comma-separated-ids>
-GOOGLE_ANALYTICS_MAX_OPERATIONS_PER_REQUEST=10
+```json
+{"google_credentials":{"type":"service_account","project_id":"..."}}
 ```
 
 Empty account or property allowlists fail closed for writes.
+`data_streams` and `ads_customers` may remain empty until those resource types
+are mutated. The old per-setting Horizon variables should be removed.
 
 ## ChatGPT workspace setup
 

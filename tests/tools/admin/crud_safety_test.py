@@ -1,6 +1,7 @@
 # Copyright 2026 Google LLC
 
 import asyncio
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -12,10 +13,14 @@ class CrudSafetyTest(unittest.TestCase):
 
     def _environment(self):
         return {
-            "GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS": "401804063",
-            "GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS": "546475155",
-            "GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS": "15297504355",
-            "GOOGLE_ANALYTICS_ALLOWED_GOOGLE_ADS_CUSTOMER_IDS": "8448275903",
+            "MCP_CONFIG": json.dumps(
+                {
+                    "accounts": ["401804063"],
+                    "properties": ["546475155"],
+                    "data_streams": ["15297504355"],
+                    "ads_customers": ["8448275903"],
+                }
+            )
         }
 
     def test_operation_hash_is_stable_and_128_bit(self):

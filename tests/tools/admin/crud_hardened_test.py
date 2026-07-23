@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import json
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -17,9 +18,13 @@ class CrudHardenedTest(unittest.TestCase):
 
     def _environment(self):
         return {
-            "GOOGLE_ANALYTICS_ALLOWED_ACCOUNT_IDS": "401804063",
-            "GOOGLE_ANALYTICS_ALLOWED_PROPERTY_IDS": "546475155",
-            "GOOGLE_ANALYTICS_ALLOWED_DATA_STREAM_IDS": "15297504355",
+            "MCP_CONFIG": json.dumps(
+                {
+                    "accounts": ["401804063"],
+                    "properties": ["546475155"],
+                    "data_streams": ["15297504355"],
+                }
+            )
         }
 
     def test_data_stream_mutation_honors_stream_allowlist(self):

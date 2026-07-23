@@ -63,6 +63,7 @@ from analytics_mcp.tools.reporting.realtime import (
 )
 
 ToolFunction = Callable[..., Awaitable[Any]]
+_ADC_PATH = Path("/tmp/google-analytics-adc.json")
 
 _READ_TOOLS: tuple[tuple[ToolFunction, str | None], ...] = (
     (get_account_summaries, None),
@@ -90,37 +91,37 @@ _MUTATION_TOOLS: tuple[tuple[ToolFunction, str | None], ...] = (
 )
 
 
-def configure_adc_from_base64() -> Path | None:
-    """Materializes optional base64-encoded ADC credentials for Horizon.
+def configure_deployment_credentials() -> Path | None:
+    """Materializes Google ADC from the shared MCP_CREDENTIALS envelope.
 
     Workload identity or an already configured GOOGLE_APPLICATION_CREDENTIALS
-    path remains supported when the base64 environment variable is absent.
+    path remains supported when the envelope or its credential field is absent.
     """
-    encoded = os.getenv(
-        "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64", ""
-    ).strip()
+    encoded = os.getenv("MCP_CREDENTIALS", "").strip()
     if not encoded:
         return None
 
     try:
-        raw = base64.b64decode(encoded, validate=True)
-        parsed = json.loads(raw.decode("utf-8"))
+        envelope = json.loads(
+            base64.b64decode(encoded, validate=True).decode("utf-8")
+        )
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(
-            "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64 is not valid base64 JSON."
+            "MCP_CREDENTIALS must be a base64-encoded JSON object."
         ) from exc
 
-    if not isinstance(parsed, dict):
+    if not isinstance(envelope, dict):
+        raise RuntimeError("MCP_CREDENTIALS must decode to a JSON object.")
+    credentials = envelope.get("google_credentials")
+    if credentials is None:
+        return None
+    if not isinstance(credentials, dict):
         raise RuntimeError(
-            "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64 must decode to a JSON object."
+            "MCP_CREDENTIALS.google_credentials must be a JSON object."
         )
 
-    credentials_path = Path(
-        os.getenv(
-            "GOOGLE_ANALYTICS_ADC_PATH",
-            "/tmp/google-analytics-adc.json",
-        )
-    )
+    raw = json.dumps(credentials, separators=(",", ":")).encode("utf-8")
+    credentials_path = _ADC_PATH
     credentials_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = credentials_path.with_suffix(
         credentials_path.suffix + ".tmp"
@@ -214,7 +215,7 @@ def _add_tool(
 
 def create_horizon_server() -> FastMCP:
     """Creates the FastMCP instance consumed by Prefect Horizon."""
-    configure_adc_from_base64()
+    configure_deployment_credentials()
     server = FastMCP(
         "Google Analytics MCP Server",
         auth=_build_auth(),
